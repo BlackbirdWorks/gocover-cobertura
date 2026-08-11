@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	cobertura "github.com/blackbirdworks/gocover-cobertura"
+	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +111,7 @@ func TestParseProfile_BuildImport(t *testing.T) {
 
 	cov := &cobertura.Coverage{}
 	err := cov.ParseProfile(&cobertura.Profile{
-		FileName: "github.com/blackbirdworks/gocover-cobertura/profile.go",
+		FileName: "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go",
 	})
 	require.NoError(t, err)
 }

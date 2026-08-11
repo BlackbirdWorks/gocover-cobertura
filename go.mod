@@ -1,6 +1,6 @@
 module github.com/blackbirdworks/gocover-cobertura
 
-go 1.26.5
+go 1.26
 
 require (
 	github.com/alecthomas/kong v1.16.1

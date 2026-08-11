@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	cobertura "github.com/blackbirdworks/gocover-cobertura"
+	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

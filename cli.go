@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-	cobertura "github.com/blackbirdworks/gocover-cobertura"
+	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 )
 
 // ErrNoMatches is returned when a glob pattern does not match any files.

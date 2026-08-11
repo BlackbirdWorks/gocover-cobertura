@@ -45,16 +45,12 @@ func TestCLIRun_File(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.xml")
 
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	cli := CLI{
 		File:   "testdata/testdata_set.txt",
 		Output: outFile,
 	}
 
-	err = cli.Run()
+	err := cli.Run()
 	require.NoError(t, err)
 
 	assert.FileExists(t, outFile)
@@ -62,16 +58,12 @@ func TestCLIRun_File(t *testing.T) {
 
 //nolint:paralleltest // t.Chdir cannot be run in parallel
 func TestCLIRun_StdinStdout(t *testing.T) {
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	cli := CLI{
 		File:   "-",
 		Output: "-",
 	}
 
-	err = cli.Run()
+	err := cli.Run()
 	require.NoError(t, err)
 }
 
@@ -80,16 +72,12 @@ func TestCLIRun_PatternGlob(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.xml")
 
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	cli := CLI{
 		Pattern: "testdata/**/*.txt",
 		Output:  outFile,
 	}
 
-	err = cli.Run()
+	err := cli.Run()
 	require.NoError(t, err)
 
 	assert.FileExists(t, outFile)
@@ -100,16 +88,12 @@ func TestCLIRun_PatternDoubleStarOnly(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.xml")
 
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	cli := CLI{
 		Pattern: "**/testdata_set.txt",
 		Output:  outFile,
 	}
 
-	err = cli.Run()
+	err := cli.Run()
 	require.NoError(t, err)
 
 	assert.FileExists(t, outFile)
@@ -120,16 +104,12 @@ func TestCLIRun_PatternNonRecursiveGlob(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.xml")
 
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	cli := CLI{
 		Pattern: "testdata/*.txt",
 		Output:  outFile,
 	}
 
-	err = cli.Run()
+	err := cli.Run()
 	require.NoError(t, err)
 
 	assert.FileExists(t, outFile)
@@ -253,10 +233,6 @@ func TestIsMatched_SlashPattern(t *testing.T) {
 
 //nolint:paralleltest // t.Chdir cannot be run in parallel
 func TestRunMain(t *testing.T) {
-	wd, err := os.Getwd()
-	require.NoError(t, err)
-	t.Chdir(filepath.Join(wd, "../.."))
-
 	code := runMain([]string{"-f", "testdata/testdata_set.txt", "-o", os.DevNull})
 	assert.Equal(t, 0, code)
 
