@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/xml"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,16 +11,19 @@ import (
 
 const SaveTestResults = false
 
-type dirInfo struct {
-	PkgPath string
-}
+// removed dirInfo (unused)
 
 func TestMain(t *testing.T) {
-	fname := filepath.Join(os.TempDir(), "stdout")
+	t.Parallel()
+	fname := filepath.Join(t.TempDir(), "stdout")
+
+	// this is test code writing a temp file
 	temp, _ := os.Create(fname)
+	//nolint:reassign // test overrides stdout
 	os.Stdout = temp
 	main()
-	outputBytes, err := ioutil.ReadFile(fname)
+
+	outputBytes, err := os.ReadFile(fname)
 	if err != nil {
 		t.Fail()
 	}
@@ -35,6 +37,7 @@ func TestMain(t *testing.T) {
 }
 
 func TestConvertParseProfilesError(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		r := recover()
 		if r == nil || r != "Can't parse profiles" {
@@ -43,11 +46,12 @@ func TestConvertParseProfilesError(t *testing.T) {
 	}()
 
 	pipe2rd, pipe2wr := io.Pipe()
-	defer func() { pipe2rd.Close(); pipe2wr.Close() }()
+	defer func() { _ = pipe2rd.Close(); _ = pipe2wr.Close() }()
 	convert(strings.NewReader("invalid data"), pipe2wr)
 }
 
 func TestConvertOutputError(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		r := recover()
 		if r == nil || r.(error).Error() != "io: read/write on closed pipe" {
@@ -56,12 +60,13 @@ func TestConvertOutputError(t *testing.T) {
 	}()
 
 	pipe2rd, pipe2wr := io.Pipe()
-	pipe2wr.Close()
-	defer func() { pipe2rd.Close() }()
+	_ = pipe2wr.Close()
+	defer func() { _ = pipe2rd.Close() }()
 	convert(strings.NewReader("mode: set"), pipe2wr)
 }
 
 func TestConvertEmpty(t *testing.T) {
+	t.Parallel()
 	data := `mode: set`
 
 	pipe2rd, pipe2wr := io.Pipe()
@@ -69,7 +74,7 @@ func TestConvertEmpty(t *testing.T) {
 
 	v := Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
-	dec.Decode(&v)
+	_ = dec.Decode(&v)
 
 	if v.XMLName.Local != "coverage" {
 		t.Error()
@@ -83,6 +88,7 @@ func TestConvertEmpty(t *testing.T) {
 }
 
 func TestParseProfileDoesntExist(t *testing.T) {
+	t.Parallel()
 	v := Coverage{}
 	profile := Profile{FileName: "does-not-exist"}
 	err := v.parseProfile(&profile)
@@ -92,6 +98,7 @@ func TestParseProfileDoesntExist(t *testing.T) {
 }
 
 func TestParseProfileNotReadable(t *testing.T) {
+	t.Parallel()
 	v := Coverage{}
 	profile := Profile{FileName: os.DevNull}
 	err := v.parseProfile(&profile)
@@ -101,18 +108,21 @@ func TestParseProfileNotReadable(t *testing.T) {
 }
 
 func TestParseProfilePermissionDenied(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "not-readable")
-	defer os.Remove(tmpfile.Name())
-	tmpfile.Chmod(000)
+	t.Parallel()
+	tmpfile, _ := os.CreateTemp(t.TempDir(), "not-readable")
+	defer func() { _ = os.Remove(tmpfile.Name()) }()
+	_ = tmpfile.Chmod(000)
 	v := Coverage{}
 	profile := Profile{FileName: tmpfile.Name()}
-	err = v.parseProfile(&profile)
+	err := v.parseProfile(&profile)
 	if err == nil || !strings.Contains(err.Error(), `permission denied`) {
 		t.Fatalf("Expected \"permission denied\" error; got: %+v", err)
 	}
 }
 
+//nolint:gocyclo // test function
 func TestConvertSetMode(t *testing.T) {
+	t.Parallel()
 	pipe1rd, err := os.Open("testdata/testdata_set.txt")
 	if err != nil {
 		t.Fatal("Can't parse testdata.")
@@ -122,11 +132,11 @@ func TestConvertSetMode(t *testing.T) {
 
 	var convwr io.Writer = pipe2wr
 	if SaveTestResults {
-		testwr, err := os.Create("testdata/testdata_set.xml")
-		if err != nil {
-			t.Fatal("Can't open output testdata.", err)
+		testwr, err2 := os.Create("testdata/testdata_set.xml")
+		if err2 != nil {
+			t.Fatal("Can't open output testdata.", err2)
 		}
-		defer testwr.Close()
+		defer func() { _ = testwr.Close() }()
 		convwr = io.MultiWriter(convwr, testwr)
 	}
 
@@ -134,7 +144,7 @@ func TestConvertSetMode(t *testing.T) {
 
 	v := Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
-	dec.Decode(&v)
+	_ = dec.Decode(&v)
 
 	if v.XMLName.Local != "coverage" {
 		t.Error()

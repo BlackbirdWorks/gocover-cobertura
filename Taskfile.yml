@@ -1,0 +1,18 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Run all default tasks (lint, vulncheck, test)
+    deps: [lint, vulncheck, test]
+
+  test:
+    desc: Run Go tests
+    cmd: go test -v -cover ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmd: golangci-lint run ./...
+
+  vulncheck:
+    desc: Run govulncheck
+    cmd: govulncheck ./...

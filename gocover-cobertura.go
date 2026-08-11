@@ -8,7 +8,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +35,8 @@ func convert(in io.Reader, out io.Writer) {
 	coverage := Coverage{Sources: sources, Packages: nil, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)}
 	coverage.parseProfiles(profiles)
 
-	fmt.Fprintf(out, xml.Header)
-	fmt.Fprintf(out, coberturaDTDDecl)
+	_, _ = fmt.Fprintf(out, xml.Header)
+	_, _ = fmt.Fprint(out, coberturaDTDDecl)
 
 	encoder := xml.NewEncoder(out)
 	encoder.Indent("", "\t")
@@ -46,18 +45,17 @@ func convert(in io.Reader, out io.Writer) {
 		panic(err)
 	}
 
-	fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out)
 }
 
-func (cov *Coverage) parseProfiles(profiles []*Profile) error {
+func (cov *Coverage) parseProfiles(profiles []*Profile) {
 	cov.Packages = []*Package{}
 	for _, profile := range profiles {
-		cov.parseProfile(profile)
+		_ = cov.parseProfile(profile)
 	}
 	cov.LinesValid = cov.NumLines()
 	cov.LinesCovered = cov.NumLinesWithHits()
 	cov.LineRate = cov.HitRate()
-	return nil
 }
 
 func (cov *Coverage) parseProfile(profile *Profile) error {
@@ -71,7 +69,8 @@ func (cov *Coverage) parseProfile(profile *Profile) error {
 	if err != nil {
 		return err
 	}
-	data, err := ioutil.ReadFile(absFilePath)
+
+	data, err := os.ReadFile(absFilePath)
 	if err != nil {
 		return err
 	}
@@ -99,30 +98,29 @@ func (cov *Coverage) parseProfile(profile *Profile) error {
 	}
 	ast.Walk(visitor, parsed)
 	pkg.LineRate = pkg.HitRate()
+
 	return nil
 }
 
 type fileVisitor struct {
 	fset     *token.FileSet
-	fileName string
-	fileData []byte
 	pkg      *Package
 	classes  map[string]*Class
 	profile  *Profile
+	fileName string
+	fileData []byte
 }
 
 func (v *fileVisitor) Visit(node ast.Node) ast.Visitor {
-	switch n := node.(type) {
-	case *ast.FuncDecl:
+	if n, ok := node.(*ast.FuncDecl); ok {
 		class := v.class(n)
 		method := v.method(n)
 		method.LineRate = method.Lines.HitRate()
 		class.Methods = append(class.Methods, method)
-		for _, line := range method.Lines {
-			class.Lines = append(class.Lines, line)
-		}
+		class.Lines = append(class.Lines, method.Lines...)
 		class.LineRate = class.Lines.HitRate()
 	}
+
 	return v
 }
 
@@ -150,17 +148,19 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 			method.Lines.AddOrUpdateLine(i, int64(b.Count))
 		}
 	}
+
 	return method
 }
 
 func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 	className := v.recvName(n)
-	var class *Class = v.classes[className]
+	class := v.classes[className]
 	if class == nil {
 		class = &Class{Name: className, Filename: v.fileName, Methods: []*Method{}, Lines: []*Line{}}
 		v.classes[className] = class
 		v.pkg.Classes = append(v.pkg.Classes, class)
 	}
+
 	return class
 }
 
@@ -172,5 +172,6 @@ func (v *fileVisitor) recvName(n *ast.FuncDecl) string {
 	start := v.fset.Position(recv.Pos())
 	end := v.fset.Position(recv.End())
 	name := string(v.fileData[start.Offset:end.Offset])
+
 	return strings.TrimSpace(strings.TrimLeft(name, "*"))
 }
