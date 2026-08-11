@@ -29,7 +29,7 @@ jobs:
         run: task test
 
       - name: Generate Cobertura XML
-        run: go run ./cmd/gocover-cobertura -f coverage.out -o cobertura.xml
+        run: go run . -f coverage.txt -o cobertura.xml
 
       - name: Upload Code Coverage
         uses: actions/upload-code-coverage@v1
@@ -37,6 +37,11 @@ jobs:
           file: cobertura.xml
           language: go
           label: code-coverage/go
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   lint:
     name: Lint

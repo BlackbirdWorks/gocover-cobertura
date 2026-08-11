@@ -7,7 +7,7 @@ tasks:
 
   test:
     desc: Run Go tests
-    cmd: go test -v -coverprofile=coverage.out ./...
+    cmd: go test -v -coverprofile=coverage.txt ./...
 
   lint:
     desc: Run golangci-lint

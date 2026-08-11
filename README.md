@@ -10,7 +10,7 @@ This is useful for generating coverage reports in CI pipelines (like Jenkins, Gi
 Install the latest version using `go install`:
 
 ```bash
-go install github.com/blackbirdworks/gocover-cobertura/cmd/gocover-cobertura@latest
+go install github.com/blackbirdworks/gocover-cobertura@latest
 ```
 
 ## Usage

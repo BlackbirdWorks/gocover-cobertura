@@ -1,7 +1,7 @@
 project_name: gocover-cobertura
 
 builds:
-  - main: ./cmd/gocover-cobertura
+  - main: .
     env:
       - CGO_ENABLED=0
     goos:
