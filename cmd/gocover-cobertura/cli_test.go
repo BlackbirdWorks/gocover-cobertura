@@ -10,7 +10,7 @@ import (
 )
 
 //nolint:paralleltest // t.Chdir cannot be run in parallel
-func TestCLIRun(t *testing.T) {
+func TestCLIRun_File(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "output.xml")
 
@@ -19,8 +19,28 @@ func TestCLIRun(t *testing.T) {
 	t.Chdir(filepath.Join(wd, "../.."))
 
 	cli := CLI{
-		Input:  "testdata/testdata_set.txt",
+		File:   "testdata/testdata_set.txt",
 		Output: outFile,
+	}
+
+	err = cli.Run()
+	require.NoError(t, err)
+
+	assert.FileExists(t, outFile)
+}
+
+//nolint:paralleltest // t.Chdir cannot be run in parallel
+func TestCLIRun_PatternGlob(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "output.xml")
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Chdir(filepath.Join(wd, "../.."))
+
+	cli := CLI{
+		Pattern: "testdata/**/*.txt",
+		Output:  outFile,
 	}
 
 	err = cli.Run()
@@ -33,11 +53,24 @@ func TestCLIRun_Error(t *testing.T) {
 	t.Parallel()
 
 	cli := CLI{
-		Input:  "nonexistent-file.txt",
+		File:   "nonexistent-file.txt",
 		Output: "-",
 	}
 
 	err := cli.Run()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to open input file")
+}
+
+func TestCLIRun_PatternNoMatch(t *testing.T) {
+	t.Parallel()
+
+	cli := CLI{
+		Pattern: "nonexistent-dir/**/*.out",
+		Output:  "-",
+	}
+
+	err := cli.Run()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no files matched pattern")
 }
