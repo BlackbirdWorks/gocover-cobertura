@@ -1,9 +1,11 @@
+// Package cobertura defines data structures and XML serialization models for Cobertura coverage reports.
 package cobertura
 
 import (
 	"encoding/xml"
 )
 
+// Coverage represents the top-level Cobertura XML report structure.
 type Coverage struct {
 	XMLName         xml.Name   `xml:"coverage"`
 	Version         string     `xml:"version,attr"`
@@ -19,10 +21,12 @@ type Coverage struct {
 	Complexity      float32    `xml:"complexity,attr"`
 }
 
+// Source represents a source code root directory in a Cobertura report.
 type Source struct {
 	Path string `xml:",chardata"`
 }
 
+// Package represents a package containing source classes in a Cobertura report.
 type Package struct {
 	Name       string   `xml:"name,attr"`
 	Classes    []*Class `xml:"classes>class"`
@@ -31,6 +35,7 @@ type Package struct {
 	Complexity float32  `xml:"complexity,attr"`
 }
 
+// Class represents a single source file/type definition in a Cobertura report.
 type Class struct {
 	Name       string    `xml:"name,attr"`
 	Filename   string    `xml:"filename,attr"`
@@ -41,6 +46,7 @@ type Class struct {
 	Complexity float32   `xml:"complexity,attr"`
 }
 
+// Method represents a function or method definition in a Cobertura report.
 type Method struct {
 	Name       string  `xml:"name,attr"`
 	Signature  string  `xml:"signature,attr"`
@@ -50,16 +56,16 @@ type Method struct {
 	Complexity float32 `xml:"complexity,attr"`
 }
 
+// Line represents code execution metrics for a single line number in a Cobertura report.
 type Line struct {
 	Number int   `xml:"number,attr"`
 	Hits   int64 `xml:"hits,attr"`
 }
 
-// Lines is a slice of Line pointers, with some convenience methods.
+// Lines is a slice of Line pointers, with convenience calculation methods.
 type Lines []*Line
 
-// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines
-// have hits.
+// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
 func (lines *Lines) HitRate() float32 {
 	return float32(lines.NumLinesWithHits()) / float32(len(*lines))
 }
@@ -98,8 +104,7 @@ func (lines *Lines) AddOrUpdateLine(lineNumber int, hits int64) {
 	*lines = append(*lines, &Line{Number: lineNumber, Hits: hits})
 }
 
-// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines
-// have hits.
+// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
 func (method Method) HitRate() float32 {
 	return method.Lines.HitRate()
 }
@@ -114,8 +119,7 @@ func (method Method) NumLinesWithHits() int64 {
 	return method.Lines.NumLinesWithHits()
 }
 
-// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines
-// have hits.
+// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
 func (class Class) HitRate() float32 {
 	return float32(class.NumLinesWithHits()) / float32(class.NumLines())
 }
@@ -140,8 +144,7 @@ func (class Class) NumLinesWithHits() int64 {
 	return numLinesWithHits
 }
 
-// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines
-// have hits.
+// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
 func (pkg Package) HitRate() float32 {
 	return float32(pkg.NumLinesWithHits()) / float32(pkg.NumLines())
 }
@@ -166,8 +169,7 @@ func (pkg Package) NumLinesWithHits() int64 {
 	return numLinesWithHits
 }
 
-// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines
-// have hits.
+// HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
 func (cov *Coverage) HitRate() float32 {
 	return float32(cov.NumLinesWithHits()) / float32(cov.NumLines())
 }
