@@ -172,10 +172,10 @@ func TestConvert_Error(t *testing.T) {
 	// Dynamically compute the size of the XML output without newline
 	// to properly test write boundaries in different environments.
 	inStr := "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
-	var b bytes.Buffer
-	err := cobertura.Convert(strings.NewReader(inStr), &b)
-	require.NoError(t, err)
-	xmlSize := b.Len() - 1 // subtract the newline
+	var sizeBuf bytes.Buffer
+	sizeErr := cobertura.Convert(strings.NewReader(inStr), &sizeBuf)
+	require.NoError(t, sizeErr)
+	xmlSize := sizeBuf.Len() - 1 // subtract the newline
 
 	tests := []struct {
 		setupWriter   func(t *testing.T) (io.Writer, func())
