@@ -1,6 +1,7 @@
-package main
+package cobertura
 
 import (
+	"bufio"
 	"encoding/xml"
 	"fmt"
 	"go/ast"
@@ -16,11 +17,11 @@ import (
 
 const coberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
-func main() {
-	convert(os.Stdin, os.Stdout)
-}
+// Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
+func Convert(in io.Reader, out io.Writer) {
+	bufOut := bufio.NewWriter(out)
+	defer bufOut.Flush()
 
-func convert(in io.Reader, out io.Writer) {
 	profiles, err := ParseProfiles(in)
 	if err != nil {
 		panic("Can't parse profiles")
@@ -35,17 +36,17 @@ func convert(in io.Reader, out io.Writer) {
 	coverage := Coverage{Sources: sources, Packages: nil, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)}
 	coverage.parseProfiles(profiles)
 
-	_, _ = fmt.Fprintf(out, xml.Header)
-	_, _ = fmt.Fprint(out, coberturaDTDDecl)
+	_, _ = fmt.Fprintf(bufOut, xml.Header)
+	_, _ = fmt.Fprint(bufOut, coberturaDTDDecl)
 
-	encoder := xml.NewEncoder(out)
+	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
 	err = encoder.Encode(coverage)
 	if err != nil {
 		panic(err)
 	}
 
-	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(bufOut)
 }
 
 func (cov *Coverage) parseProfiles(profiles []*Profile) {

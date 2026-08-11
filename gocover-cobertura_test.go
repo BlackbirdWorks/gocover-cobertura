@@ -1,4 +1,5 @@
-package main
+//nolint:testpackage // testing unexported methods like parseProfile
+package cobertura
 
 import (
 	"encoding/xml"
@@ -19,9 +20,8 @@ func TestMain(t *testing.T) {
 
 	// this is test code writing a temp file
 	temp, _ := os.Create(fname)
-	//nolint:reassign // test overrides stdout
-	os.Stdout = temp
-	main()
+	Convert(os.Stdin, temp)
+	_ = temp.Close()
 
 	outputBytes, err := os.ReadFile(fname)
 	if err != nil {
@@ -47,7 +47,7 @@ func TestConvertParseProfilesError(t *testing.T) {
 
 	pipe2rd, pipe2wr := io.Pipe()
 	defer func() { _ = pipe2rd.Close(); _ = pipe2wr.Close() }()
-	convert(strings.NewReader("invalid data"), pipe2wr)
+	Convert(strings.NewReader("invalid data"), pipe2wr)
 }
 
 func TestConvertOutputError(t *testing.T) {
@@ -62,7 +62,7 @@ func TestConvertOutputError(t *testing.T) {
 	pipe2rd, pipe2wr := io.Pipe()
 	_ = pipe2wr.Close()
 	defer func() { _ = pipe2rd.Close() }()
-	convert(strings.NewReader("mode: set"), pipe2wr)
+	Convert(strings.NewReader("mode: set"), pipe2wr)
 }
 
 func TestConvertEmpty(t *testing.T) {
@@ -70,7 +70,7 @@ func TestConvertEmpty(t *testing.T) {
 	data := `mode: set`
 
 	pipe2rd, pipe2wr := io.Pipe()
-	go convert(strings.NewReader(data), pipe2wr)
+	go Convert(strings.NewReader(data), pipe2wr)
 
 	v := Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
@@ -140,7 +140,7 @@ func TestConvertSetMode(t *testing.T) {
 		convwr = io.MultiWriter(convwr, testwr)
 	}
 
-	go convert(pipe1rd, convwr)
+	go Convert(pipe1rd, convwr)
 
 	v := Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
