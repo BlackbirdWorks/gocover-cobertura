@@ -1,5 +1,4 @@
-//nolint:lll // external URL
-// Imported from https://code.google.com/p/go/source/browse/cmd/cover/profile.go?repo=tools&r=c10a9dd5e0b0a859a8385b6f004584cb083a3934
+// Imported from github.com/golang/tools/blob/master/cover/profile.go
 
 // Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
@@ -9,6 +8,7 @@ package cobertura
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"go/build"
 	"io"
@@ -35,6 +35,13 @@ type ProfileBlock struct {
 	NumStmt, Count      int
 }
 
+var (
+	// ErrBadMode is returned when the coverage profile mode is invalid.
+	ErrBadMode = errors.New("bad mode line")
+	// ErrBadFormat is returned when a line in the coverage profile has an invalid format.
+	ErrBadFormat = errors.New("line doesn't match expected format")
+)
+
 type byFileName []*Profile
 
 func (p byFileName) Len() int           { return len(p) }
@@ -56,8 +63,7 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 		if mode == "" {
 			const p = "mode: "
 			if !strings.HasPrefix(line, p) || line == p {
-				//nolint:err113 // dynamic error OK here
-				return nil, fmt.Errorf("bad mode line: %v", line)
+				return nil, fmt.Errorf("%w: %v", ErrBadMode, line)
 			}
 			mode = line[len(p):]
 
@@ -65,8 +71,7 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 		}
 		m := lineRe.FindStringSubmatch(line)
 		if m == nil {
-			//nolint:err113 // dynamic error OK here
-			return nil, fmt.Errorf("line %q doesn't match expected format: %v", m, lineRe)
+			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, lineRe)
 		}
 		fn := m[1]
 		p := files[fn]
