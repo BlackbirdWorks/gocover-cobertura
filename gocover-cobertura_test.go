@@ -1,5 +1,4 @@
-//nolint:testpackage // testing unexported methods like parseProfile
-package cobertura
+package cobertura_test
 
 import (
 	"encoding/xml"
@@ -8,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cobertura "github.com/blackbirdworks/gocover-cobertura"
 )
 
 const SaveTestResults = false
@@ -20,7 +21,7 @@ func TestMain(t *testing.T) {
 
 	// this is test code writing a temp file
 	temp, _ := os.Create(fname)
-	Convert(os.Stdin, temp)
+	cobertura.Convert(os.Stdin, temp)
 	_ = temp.Close()
 
 	outputBytes, err := os.ReadFile(fname)
@@ -31,7 +32,7 @@ func TestMain(t *testing.T) {
 	if !strings.Contains(outputString, xml.Header) {
 		t.Fail()
 	}
-	if !strings.Contains(outputString, coberturaDTDDecl) {
+	if !strings.Contains(outputString, cobertura.CoberturaDTDDeclForTest) {
 		t.Fail()
 	}
 }
@@ -47,7 +48,7 @@ func TestConvertParseProfilesError(t *testing.T) {
 
 	pipe2rd, pipe2wr := io.Pipe()
 	defer func() { _ = pipe2rd.Close(); _ = pipe2wr.Close() }()
-	Convert(strings.NewReader("invalid data"), pipe2wr)
+	cobertura.Convert(strings.NewReader("invalid data"), pipe2wr)
 }
 
 func TestConvertOutputError(t *testing.T) {
@@ -62,7 +63,7 @@ func TestConvertOutputError(t *testing.T) {
 	pipe2rd, pipe2wr := io.Pipe()
 	_ = pipe2wr.Close()
 	defer func() { _ = pipe2rd.Close() }()
-	Convert(strings.NewReader("mode: set"), pipe2wr)
+	cobertura.Convert(strings.NewReader("mode: set"), pipe2wr)
 }
 
 func TestConvertEmpty(t *testing.T) {
@@ -70,9 +71,9 @@ func TestConvertEmpty(t *testing.T) {
 	data := `mode: set`
 
 	pipe2rd, pipe2wr := io.Pipe()
-	go Convert(strings.NewReader(data), pipe2wr)
+	go cobertura.Convert(strings.NewReader(data), pipe2wr)
 
-	v := Coverage{}
+	v := cobertura.Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
 	_ = dec.Decode(&v)
 
@@ -89,9 +90,9 @@ func TestConvertEmpty(t *testing.T) {
 
 func TestParseProfileDoesntExist(t *testing.T) {
 	t.Parallel()
-	v := Coverage{}
-	profile := Profile{FileName: "does-not-exist"}
-	err := v.parseProfile(&profile)
+	v := cobertura.Coverage{}
+	profile := cobertura.Profile{FileName: "does-not-exist"}
+	err := v.ParseProfileForTest(&profile)
 	if err == nil || !strings.Contains(err.Error(), `can't find "does-not-exist"`) {
 		t.Fatalf("Expected \"can't find\" error; got: %+v", err)
 	}
@@ -99,9 +100,9 @@ func TestParseProfileDoesntExist(t *testing.T) {
 
 func TestParseProfileNotReadable(t *testing.T) {
 	t.Parallel()
-	v := Coverage{}
-	profile := Profile{FileName: os.DevNull}
-	err := v.parseProfile(&profile)
+	v := cobertura.Coverage{}
+	profile := cobertura.Profile{FileName: os.DevNull}
+	err := v.ParseProfileForTest(&profile)
 	if err == nil || !strings.Contains(err.Error(), `expected 'package', found 'EOF'`) {
 		t.Fatalf("Expected \"expected 'package', found 'EOF'\" error; got: %+v", err)
 	}
@@ -112,9 +113,9 @@ func TestParseProfilePermissionDenied(t *testing.T) {
 	tmpfile, _ := os.CreateTemp(t.TempDir(), "not-readable")
 	defer func() { _ = os.Remove(tmpfile.Name()) }()
 	_ = tmpfile.Chmod(000)
-	v := Coverage{}
-	profile := Profile{FileName: tmpfile.Name()}
-	err := v.parseProfile(&profile)
+	v := cobertura.Coverage{}
+	profile := cobertura.Profile{FileName: tmpfile.Name()}
+	err := v.ParseProfileForTest(&profile)
 	if err == nil || !strings.Contains(err.Error(), `permission denied`) {
 		t.Fatalf("Expected \"permission denied\" error; got: %+v", err)
 	}
@@ -140,9 +141,9 @@ func TestConvertSetMode(t *testing.T) {
 		convwr = io.MultiWriter(convwr, testwr)
 	}
 
-	go Convert(pipe1rd, convwr)
+	go cobertura.Convert(pipe1rd, convwr)
 
-	v := Coverage{}
+	v := cobertura.Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
 	_ = dec.Decode(&v)
 
@@ -188,7 +189,7 @@ func TestConvertSetMode(t *testing.T) {
 		t.Errorf("Expected 4 lines but got %d", len(c.Lines))
 	}
 
-	var l *Line
+	var l *cobertura.Line
 	if l = m.Lines[0]; l.Number != 4 || l.Hits != 1 {
 		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
 	}
