@@ -2,7 +2,10 @@ module github.com/blackbirdworks/gocover-cobertura
 
 go 1.26.5
 
-require github.com/stretchr/testify v1.11.1
+require (
+	github.com/alecthomas/kong v1.16.1
+	github.com/stretchr/testify v1.11.1
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

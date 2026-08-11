@@ -22,7 +22,8 @@ func TestConvert_XMLHeaders(t *testing.T) {
 	temp, err := os.Create(fname)
 	require.NoError(t, err)
 
-	cobertura.Convert(os.Stdin, temp)
+	err = cobertura.Convert(os.Stdin, temp)
+	require.NoError(t, err)
 	require.NoError(t, temp.Close())
 
 	outputBytes, err := os.ReadFile(fname)
@@ -30,29 +31,29 @@ func TestConvert_XMLHeaders(t *testing.T) {
 
 	outputString := string(outputBytes)
 	assert.Contains(t, outputString, xml.Header)
-	assert.Contains(t, outputString, cobertura.CoberturaDTDDeclForTest)
+	assert.Contains(t, outputString, cobertura.CoberturaDTDDecl)
 }
 
 func TestConvert_Errors(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		expectedPanic any
 		name          string
 		input         string
+		expectedError string
 		closeWriter   bool
 	}{
 		{
 			name:          "parse profiles error",
 			input:         "invalid data",
 			closeWriter:   false,
-			expectedPanic: "Can't parse profiles",
+			expectedError: "failed to parse profiles",
 		},
 		{
 			name:          "output error (closed pipe)",
 			input:         "mode: set",
 			closeWriter:   true,
-			expectedPanic: "io: read/write on closed pipe",
+			expectedError: "io: read/write on closed pipe",
 		},
 	}
 
@@ -60,22 +61,15 @@ func TestConvert_Errors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			defer func() {
-				r := recover()
-				if err, ok := r.(error); ok {
-					assert.Equal(t, tt.expectedPanic, err.Error())
-				} else {
-					assert.Equal(t, tt.expectedPanic, r)
-				}
-			}()
-
 			pipe2rd, pipe2wr := io.Pipe()
 			if tt.closeWriter {
 				require.NoError(t, pipe2wr.Close())
 			}
 			defer func() { _ = pipe2rd.Close(); _ = pipe2wr.Close() }()
 
-			cobertura.Convert(strings.NewReader(tt.input), pipe2wr)
+			err := cobertura.Convert(strings.NewReader(tt.input), pipe2wr)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
 }
@@ -86,7 +80,7 @@ func TestConvert_Empty(t *testing.T) {
 
 	pipe2rd, pipe2wr := io.Pipe()
 	go func() {
-		cobertura.Convert(strings.NewReader(data), pipe2wr)
+		_ = cobertura.Convert(strings.NewReader(data), pipe2wr)
 		_ = pipe2wr.Close()
 	}()
 
@@ -135,7 +129,7 @@ func TestParseProfile_Errors(t *testing.T) {
 
 			v := cobertura.Coverage{}
 			profile := cobertura.Profile{FileName: tt.fileName}
-			parseErr := v.ParseProfileForTest(&profile)
+			parseErr := v.ParseProfile(&profile)
 
 			require.Error(t, parseErr)
 			assert.Contains(t, parseErr.Error(), tt.expectedError)
@@ -160,7 +154,7 @@ func TestConvert_SetMode(t *testing.T) {
 	}
 
 	go func() {
-		cobertura.Convert(pipe1rd, convwr)
+		_ = cobertura.Convert(pipe1rd, convwr)
 		_ = pipe2wr.Close()
 	}()
 

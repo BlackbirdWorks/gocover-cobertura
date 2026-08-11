@@ -3,6 +3,7 @@ package cobertura
 import (
 	"bufio"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -15,16 +16,17 @@ import (
 	"time"
 )
 
-const coberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
+// CoberturaDTDDecl is the standard DTD declaration for Cobertura XML.
+const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
 // Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
-func Convert(in io.Reader, out io.Writer) {
+func Convert(in io.Reader, out io.Writer) error {
+	bufIn := bufio.NewReader(in)
 	bufOut := bufio.NewWriter(out)
-	defer bufOut.Flush()
 
-	profiles, err := ParseProfiles(in)
+	profiles, err := ParseProfiles(bufIn)
 	if err != nil {
-		panic("Can't parse profiles")
+		return fmt.Errorf("failed to parse profiles: %w", err)
 	}
 
 	srcDirs := build.Default.SrcDirs()
@@ -33,47 +35,79 @@ func Convert(in io.Reader, out io.Writer) {
 		sources[i] = &Source{dir}
 	}
 
-	coverage := Coverage{Sources: sources, Packages: nil, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)}
-	coverage.parseProfiles(profiles)
+	coverage := Coverage{
+		Sources:   sources,
+		Packages:  nil,
+		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
+	}
 
-	_, _ = fmt.Fprintf(bufOut, xml.Header)
-	_, _ = fmt.Fprint(bufOut, coberturaDTDDecl)
+	if err = coverage.ParseProfiles(profiles); err != nil {
+		return fmt.Errorf("failed to process profiles: %w", err)
+	}
+
+	if _, err = fmt.Fprintf(bufOut, xml.Header); err != nil {
+		return fmt.Errorf("failed to write XML header: %w", err)
+	}
+
+	if _, err = fmt.Fprint(bufOut, CoberturaDTDDecl); err != nil {
+		return fmt.Errorf("failed to write DTD declaration: %w", err)
+	}
 
 	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
-	err = encoder.Encode(coverage)
-	if err != nil {
-		panic(err)
+	if err = encoder.Encode(coverage); err != nil {
+		return fmt.Errorf("failed to encode XML: %w", err)
 	}
 
-	_, _ = fmt.Fprintln(bufOut)
+	if _, err = fmt.Fprintln(bufOut); err != nil {
+		return fmt.Errorf("failed to write newline: %w", err)
+	}
+
+	if err = bufOut.Flush(); err != nil {
+		return fmt.Errorf("failed to flush buffer: %w", err)
+	}
+
+	return nil
 }
 
-func (cov *Coverage) parseProfiles(profiles []*Profile) {
+// ParseProfiles processes a slice of coverage profiles and populates the Coverage metrics.
+func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	cov.Packages = []*Package{}
+	var errs []error
+
 	for _, profile := range profiles {
-		_ = cov.parseProfile(profile)
+		if err := cov.ParseProfile(profile); err != nil {
+			errs = append(errs, err)
+		}
 	}
+
 	cov.LinesValid = cov.NumLines()
 	cov.LinesCovered = cov.NumLinesWithHits()
 	cov.LineRate = cov.HitRate()
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
 }
 
-func (cov *Coverage) parseProfile(profile *Profile) error {
+// ParseProfile processes a single Profile and updates the Coverage model.
+func (cov *Coverage) ParseProfile(profile *Profile) error {
 	fileName := profile.FileName
 	absFilePath, err := findFile(fileName)
 	if err != nil {
-		return err
+		return fmt.Errorf("find file failed: %w", err)
 	}
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, absFilePath, nil, 0)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse file failed: %w", err)
 	}
 
 	data, err := os.ReadFile(absFilePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("read file failed: %w", err)
 	}
 
 	pkgPath, _ := filepath.Split(fileName)
