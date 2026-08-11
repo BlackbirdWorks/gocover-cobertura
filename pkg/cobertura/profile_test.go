@@ -2,6 +2,7 @@ package cobertura_test
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -18,100 +19,154 @@ func (e *errReader) Read([]byte) (int, error) {
 	return 0, errTestRead
 }
 
-func TestParseProfiles_ScannerError(t *testing.T) {
+func TestParseProfiles(t *testing.T) {
 	t.Parallel()
 
-	_, err := cobertura.ParseProfiles(&errReader{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "read error")
-}
+	tests := []struct {
+		reader        io.Reader
+		expectedError error
+		name          string
+		errContains   string
+		expectErr     bool
+	}{
+		{
+			name:        "scanner error",
+			reader:      &errReader{},
+			expectErr:   true,
+			errContains: "read error",
+		},
+		{
+			name:          "invalid line",
+			reader:        strings.NewReader("mode: set\ninvalid line format"),
+			expectErr:     true,
+			expectedError: cobertura.ErrBadFormat,
+		},
+		{
+			name:          "invalid first line",
+			reader:        strings.NewReader("not_a_mode_header\n"),
+			expectErr:     true,
+			expectedError: cobertura.ErrBadMode,
+		},
+		{
+			name: "integer overflow",
+			reader: strings.NewReader(
+				"mode: set\npkg/file.go:999999999999999999999999999999999999999.1,2.2 1 1\n",
+			),
+			expectErr:     true,
+			expectedError: cobertura.ErrBadFormat,
+		},
+		{
+			name:          "missing mode",
+			reader:        strings.NewReader("pkg/file.go:1.1,2.2 1 1\n"),
+			expectErr:     true,
+			expectedError: cobertura.ErrBadMode,
+		},
+		{
+			name:          "empty mode header",
+			reader:        strings.NewReader("mode: \n"),
+			expectErr:     true,
+			expectedError: cobertura.ErrBadMode,
+		},
+		{
+			name:      "successful parse with same line multiple blocks",
+			reader:    strings.NewReader("mode: set\nfoo.go:1.4,2.2 1 1\nfoo.go:1.2,2.2 1 0\n"),
+			expectErr: false,
+		},
+	}
 
-func TestParseProfiles_InvalidLine(t *testing.T) {
-	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	input := "mode: set\ninvalid line format"
-	_, err := cobertura.ParseProfiles(strings.NewReader(input))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, cobertura.ErrBadFormat)
-}
-
-func TestParseProfiles_InvalidFirstLine(t *testing.T) {
-	t.Parallel()
-
-	input := "not_a_mode_header\n"
-	_, err := cobertura.ParseProfiles(strings.NewReader(input))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, cobertura.ErrBadMode)
-}
-
-func TestParseProfiles_IntegerOverflow(t *testing.T) {
-	t.Parallel()
-
-	input := "mode: set\npkg/file.go:999999999999999999999999999999999999999.1,2.2 1 1\n"
-	_, err := cobertura.ParseProfiles(strings.NewReader(input))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, cobertura.ErrBadFormat)
-}
-
-func TestParseProfiles_MissingMode(t *testing.T) {
-	t.Parallel()
-
-	input := "pkg/file.go:1.1,2.2 1 1\n"
-	_, err := cobertura.ParseProfiles(strings.NewReader(input))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, cobertura.ErrBadMode)
-}
-
-func TestParseProfiles_EmptyModeHeader(t *testing.T) {
-	t.Parallel()
-
-	input := "mode: \n"
-	_, err := cobertura.ParseProfiles(strings.NewReader(input))
-	require.Error(t, err)
-	assert.ErrorIs(t, err, cobertura.ErrBadMode)
+			_, err := cobertura.ParseProfiles(tt.reader)
+			if tt.expectErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				if tt.expectedError != nil {
+					require.ErrorIs(t, err, tt.expectedError)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestProfile_Boundaries(t *testing.T) {
 	t.Parallel()
 
-	profile := &cobertura.Profile{
-		FileName: "foo.go",
-		Mode:     "set",
-		Blocks: []cobertura.ProfileBlock{
-			{StartLine: 1, StartCol: 4, EndLine: 2, EndCol: 2, NumStmt: 1, Count: 1},
-			{StartLine: 1, StartCol: 2, EndLine: 2, EndCol: 2, NumStmt: 1, Count: 0},
-			{StartLine: 2, StartCol: 2, EndLine: 3, EndCol: 2, NumStmt: 1, Count: 0},
+	tests := []struct {
+		profile *cobertura.Profile
+		name    string
+		src     []byte
+	}{
+		{
+			name: "boundaries regular",
+			profile: &cobertura.Profile{
+				FileName: "foo.go",
+				Mode:     "set",
+				Blocks: []cobertura.ProfileBlock{
+					{StartLine: 1, StartCol: 4, EndLine: 2, EndCol: 2, NumStmt: 1, Count: 1},
+					{StartLine: 1, StartCol: 2, EndLine: 2, EndCol: 2, NumStmt: 1, Count: 0},
+					{StartLine: 2, StartCol: 2, EndLine: 3, EndCol: 2, NumStmt: 1, Count: 0},
+				},
+			},
+			src: []byte("package foo\nfunc Foo() {}\n"),
+		},
+		{
+			name: "boundaries sort coverage",
+			profile: &cobertura.Profile{
+				FileName: "foo.go",
+				Mode:     "count",
+				Blocks: []cobertura.ProfileBlock{
+					{StartLine: 1, StartCol: 2, EndLine: 1, EndCol: 2, NumStmt: 1, Count: 5},
+					{StartLine: 1, StartCol: 2, EndLine: 1, EndCol: 2, NumStmt: 1, Count: 2},
+				},
+			},
+			src: []byte("package foo\n"),
 		},
 	}
 
-	src := []byte("package foo\nfunc Foo() {}\n")
-	boundaries := profile.Boundaries(src)
-	assert.NotEmpty(t, boundaries)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestProfile_Boundaries_SortCoverage(t *testing.T) {
-	t.Parallel()
-
-	profile := &cobertura.Profile{
-		FileName: "foo.go",
-		Mode:     "count",
-		Blocks: []cobertura.ProfileBlock{
-			{StartLine: 1, StartCol: 2, EndLine: 1, EndCol: 2, NumStmt: 1, Count: 5},
-			{StartLine: 1, StartCol: 2, EndLine: 1, EndCol: 2, NumStmt: 1, Count: 2},
-		},
+			boundaries := tt.profile.Boundaries(tt.src)
+			assert.NotEmpty(t, boundaries)
+		})
 	}
-
-	src := []byte("package foo\n")
-	boundaries := profile.Boundaries(src)
-	assert.NotEmpty(t, boundaries)
 }
 
 func TestParseProfile_BuildImport(t *testing.T) {
 	t.Parallel()
 
-	cov := &cobertura.Coverage{}
-	err := cov.ParseProfile(&cobertura.Profile{
-		FileName: "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go",
-	})
-	require.NoError(t, err)
+	tests := []struct {
+		profile   *cobertura.Profile
+		name      string
+		expectErr bool
+	}{
+		{
+			name: "successful import",
+			profile: &cobertura.Profile{
+				FileName: "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go",
+			},
+			expectErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cov := &cobertura.Coverage{}
+			err := cov.ParseProfile(tt.profile)
+			if tt.expectErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
