@@ -10,6 +10,9 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      code-quality: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -24,6 +27,16 @@ jobs:
 
       - name: Run Tests
         run: task test
+
+      - name: Generate Cobertura XML
+        run: go run ./cmd/gocover-cobertura -f coverage.out -o cobertura.xml
+
+      - name: Upload Code Coverage
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: cobertura.xml
+          language: go
+          label: code-coverage/go
 
   lint:
     name: Lint
