@@ -169,6 +169,14 @@ func TestConvert_Success(t *testing.T) {
 func TestConvert_Error(t *testing.T) {
 	t.Parallel()
 
+	// Dynamically compute the size of the XML output without newline
+	// to properly test write boundaries in different environments.
+	inStr := "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
+	var b bytes.Buffer
+	err := cobertura.Convert(strings.NewReader(inStr), &b)
+	require.NoError(t, err)
+	xmlSize := b.Len() - 1 // subtract the newline
+
 	tests := []struct {
 		setupWriter   func(t *testing.T) (io.Writer, func())
 		name          string
@@ -250,7 +258,7 @@ func TestConvert_Error(t *testing.T) {
 				t.Helper()
 				fw := &failWriter{failAfter: 0}
 
-				return bufio.NewWriterSize(fw, 985), func() {}
+				return bufio.NewWriterSize(fw, xmlSize), func() {}
 			},
 		},
 		{
@@ -259,7 +267,7 @@ func TestConvert_Error(t *testing.T) {
 			expectedError: "failed to flush buffer",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
-				fw := &failWriter{failAfter: 985}
+				fw := &failWriter{failAfter: xmlSize}
 
 				return bufio.NewWriterSize(fw, 4096), func() {}
 			},
