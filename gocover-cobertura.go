@@ -1,30 +1,37 @@
-package main
+package cobertura
 
 import (
+	"bufio"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/build"
 	"go/parser"
 	"go/token"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-const coberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
+// CoberturaDTDDecl is the standard DTD declaration for Cobertura XML.
+const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
-func main() {
-	convert(os.Stdin, os.Stdout)
-}
+// Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
+func Convert(in io.Reader, out io.Writer) error {
+	bufIn := bufio.NewReader(in)
+	var bufOut *bufio.Writer
+	if bw, ok := out.(*bufio.Writer); ok {
+		bufOut = bw
+	} else {
+		bufOut = bufio.NewWriter(out)
+	}
 
-func convert(in io.Reader, out io.Writer) {
-	profiles, err := ParseProfiles(in)
+	profiles, err := ParseProfiles(bufIn)
 	if err != nil {
-		panic("Can't parse profiles")
+		return fmt.Errorf("failed to parse profiles: %w", err)
 	}
 
 	srcDirs := build.Default.SrcDirs()
@@ -33,47 +40,80 @@ func convert(in io.Reader, out io.Writer) {
 		sources[i] = &Source{dir}
 	}
 
-	coverage := Coverage{Sources: sources, Packages: nil, Timestamp: time.Now().UnixNano() / int64(time.Millisecond)}
-	coverage.parseProfiles(profiles)
+	coverage := Coverage{
+		Sources:   sources,
+		Packages:  nil,
+		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
+	}
 
-	fmt.Fprintf(out, xml.Header)
-	fmt.Fprintf(out, coberturaDTDDecl)
+	if err = coverage.ParseProfiles(profiles); err != nil {
+		return fmt.Errorf("failed to process profiles: %w", err)
+	}
 
-	encoder := xml.NewEncoder(out)
+	if _, err = fmt.Fprintf(bufOut, xml.Header); err != nil {
+		return fmt.Errorf("failed to write XML header: %w", err)
+	}
+
+	if _, err = fmt.Fprint(bufOut, CoberturaDTDDecl); err != nil {
+		return fmt.Errorf("failed to write DTD declaration: %w", err)
+	}
+
+	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
-	err = encoder.Encode(coverage)
-	if err != nil {
-		panic(err)
+	if err = encoder.Encode(coverage); err != nil {
+		return fmt.Errorf("failed to encode XML: %w", err)
 	}
 
-	fmt.Fprintln(out)
-}
-
-func (cov *Coverage) parseProfiles(profiles []*Profile) error {
-	cov.Packages = []*Package{}
-	for _, profile := range profiles {
-		cov.parseProfile(profile)
+	if _, err = fmt.Fprintln(bufOut); err != nil {
+		return fmt.Errorf("failed to write newline: %w", err)
 	}
-	cov.LinesValid = cov.NumLines()
-	cov.LinesCovered = cov.NumLinesWithHits()
-	cov.LineRate = cov.HitRate()
+
+	if err = bufOut.Flush(); err != nil {
+		return fmt.Errorf("failed to flush buffer: %w", err)
+	}
+
 	return nil
 }
 
-func (cov *Coverage) parseProfile(profile *Profile) error {
+// ParseProfiles processes a slice of coverage profiles and populates the Coverage metrics.
+func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
+	cov.Packages = []*Package{}
+	var errs []error
+
+	for _, profile := range profiles {
+		if err := cov.ParseProfile(profile); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	cov.LinesValid = cov.NumLines()
+	cov.LinesCovered = cov.NumLinesWithHits()
+	cov.LineRate = cov.HitRate()
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	return nil
+}
+
+// ParseProfile processes a single Profile and updates the Coverage model.
+func (cov *Coverage) ParseProfile(profile *Profile) error {
 	fileName := profile.FileName
 	absFilePath, err := findFile(fileName)
 	if err != nil {
-		return err
+		return fmt.Errorf("find file failed: %w", err)
 	}
+
+	data, err := os.ReadFile(absFilePath)
+	if err != nil {
+		return fmt.Errorf("read file failed: %w", err)
+	}
+
 	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, absFilePath, nil, 0)
+	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
 	if err != nil {
-		return err
-	}
-	data, err := ioutil.ReadFile(absFilePath)
-	if err != nil {
-		return err
+		return fmt.Errorf("parse file failed: %w", err)
 	}
 
 	pkgPath, _ := filepath.Split(fileName)
@@ -89,6 +129,7 @@ func (cov *Coverage) parseProfile(profile *Profile) error {
 		pkg = &Package{Name: pkgPath, Classes: []*Class{}}
 		cov.Packages = append(cov.Packages, pkg)
 	}
+
 	visitor := &fileVisitor{
 		fset:     fset,
 		fileName: fileName,
@@ -99,30 +140,29 @@ func (cov *Coverage) parseProfile(profile *Profile) error {
 	}
 	ast.Walk(visitor, parsed)
 	pkg.LineRate = pkg.HitRate()
+
 	return nil
 }
 
 type fileVisitor struct {
 	fset     *token.FileSet
-	fileName string
-	fileData []byte
 	pkg      *Package
 	classes  map[string]*Class
 	profile  *Profile
+	fileName string
+	fileData []byte
 }
 
 func (v *fileVisitor) Visit(node ast.Node) ast.Visitor {
-	switch n := node.(type) {
-	case *ast.FuncDecl:
+	if n, ok := node.(*ast.FuncDecl); ok {
 		class := v.class(n)
 		method := v.method(n)
 		method.LineRate = method.Lines.HitRate()
 		class.Methods = append(class.Methods, method)
-		for _, line := range method.Lines {
-			class.Lines = append(class.Lines, line)
-		}
+		class.Lines = append(class.Lines, method.Lines...)
 		class.LineRate = class.Lines.HitRate()
 	}
+
 	return v
 }
 
@@ -150,17 +190,19 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 			method.Lines.AddOrUpdateLine(i, int64(b.Count))
 		}
 	}
+
 	return method
 }
 
 func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 	className := v.recvName(n)
-	var class *Class = v.classes[className]
+	class := v.classes[className]
 	if class == nil {
 		class = &Class{Name: className, Filename: v.fileName, Methods: []*Method{}, Lines: []*Line{}}
 		v.classes[className] = class
 		v.pkg.Classes = append(v.pkg.Classes, class)
 	}
+
 	return class
 }
 
@@ -172,5 +214,6 @@ func (v *fileVisitor) recvName(n *ast.FuncDecl) string {
 	start := v.fset.Position(recv.Pos())
 	end := v.fset.Position(recv.End())
 	name := string(v.fileData[start.Offset:end.Offset])
+
 	return strings.TrimSpace(strings.TrimLeft(name, "*"))
 }

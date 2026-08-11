@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      code-quality: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+
+      - name: Run Tests
+        run: task test
+
+      - name: Generate Cobertura XML
+        run: go run ./cmd/gocover-cobertura -f coverage.out -o cobertura.xml
+
+      - name: Upload Code Coverage
+        uses: actions/upload-code-coverage@v1
+        with:
+          file: cobertura.xml
+          language: go
+          label: code-coverage/go
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install golangci-lint v2
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+  vulncheck:
+    name: Vulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: '1.26'
+          go-package: ./...

@@ -1,13 +1,15 @@
-// Imported from https://code.google.com/p/go/source/browse/cmd/cover/profile.go?repo=tools&r=c10a9dd5e0b0a859a8385b6f004584cb083a3934
+// Imported from github.com/golang/tools/blob/master/cover/profile.go
 
 // Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package cobertura
 
 import (
 	"bufio"
+	"cmp"
+	"errors"
 	"fmt"
 	"go/build"
 	"io"
@@ -15,7 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -34,91 +36,102 @@ type ProfileBlock struct {
 	NumStmt, Count      int
 }
 
-type byFileName []*Profile
-
-func (p byFileName) Len() int           { return len(p) }
-func (p byFileName) Less(i, j int) bool { return p[i].FileName < p[j].FileName }
-func (p byFileName) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
+var (
+	// ErrBadMode is returned when the coverage profile mode is invalid.
+	ErrBadMode = errors.New("bad mode line")
+	// ErrBadFormat is returned when a line in the coverage profile has an invalid format.
+	ErrBadFormat = errors.New("line doesn't match expected format")
+)
 
 // ParseProfiles parses profile data from the given Reader and returns a
 // Profile for each file.
 func ParseProfiles(in io.Reader) ([]*Profile, error) {
 	files := make(map[string]*Profile)
-	// First line is "mode: foo", where foo is "set", "count", or "atomic".
-	// Rest of file is in the format
-	//      encoding/base64/base64.go:34.44,37.40 3 1
-	// where the fields are: name.go:line.column,line.column numberOfStatements count
 	s := bufio.NewScanner(in)
 	mode := ""
+
 	for s.Scan() {
 		line := s.Text()
-		if mode == "" {
-			const p = "mode: "
-			if !strings.HasPrefix(line, p) || line == p {
-				return nil, fmt.Errorf("bad mode line: %v", line)
-			}
+		const p = "mode: "
+		if strings.HasPrefix(line, p) {
 			mode = line[len(p):]
+			if mode == "" {
+				return nil, fmt.Errorf("%w: %v", ErrBadMode, line)
+			}
+
 			continue
 		}
+
+		if mode == "" {
+			return nil, fmt.Errorf("%w: missing mode header", ErrBadMode)
+		}
+
 		m := lineRe.FindStringSubmatch(line)
 		if m == nil {
-			return nil, fmt.Errorf("line %q doesn't match expected format: %v", m, lineRe)
+			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, lineRe)
 		}
+
 		fn := m[1]
-		p := files[fn]
-		if p == nil {
-			p = &Profile{
+		prof := files[fn]
+		if prof == nil {
+			prof = &Profile{
 				FileName: fn,
 				Mode:     mode,
 			}
-			files[fn] = p
+			files[fn] = prof
 		}
-		p.Blocks = append(p.Blocks, ProfileBlock{
-			StartLine: toInt(m[2]),
-			StartCol:  toInt(m[3]),
-			EndLine:   toInt(m[4]),
-			EndCol:    toInt(m[5]),
-			NumStmt:   toInt(m[6]),
-			Count:     toInt(m[7]),
+
+		startLine, err1 := strconv.Atoi(m[2])
+		startCol, err2 := strconv.Atoi(m[3])
+		endLine, err3 := strconv.Atoi(m[4])
+		endCol, err4 := strconv.Atoi(m[5])
+		numStmt, err6 := strconv.Atoi(m[6])
+		count, err7 := strconv.Atoi(m[7])
+		if err := errors.Join(err1, err2, err3, err4, err6, err7); err != nil {
+			return nil, fmt.Errorf("%w: invalid integer in line %q: %w", ErrBadFormat, line, err)
+		}
+
+		prof.Blocks = append(prof.Blocks, ProfileBlock{
+			StartLine: startLine,
+			StartCol:  startCol,
+			EndLine:   endLine,
+			EndCol:    endCol,
+			NumStmt:   numStmt,
+			Count:     count,
 		})
 	}
+
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
+
 	for _, p := range files {
-		sort.Sort(blocksByStart(p.Blocks))
+		slices.SortFunc(p.Blocks, func(a, b ProfileBlock) int {
+			if c := cmp.Compare(a.StartLine, b.StartLine); c != 0 {
+				return c
+			}
+
+			return cmp.Compare(a.StartCol, b.StartCol)
+		})
 	}
-	// Generate a sorted slice.
+
 	profiles := make([]*Profile, 0, len(files))
 	for _, profile := range files {
 		profiles = append(profiles, profile)
 	}
-	sort.Sort(byFileName(profiles))
+
+	slices.SortFunc(profiles, func(a, b *Profile) int {
+		return cmp.Compare(a.FileName, b.FileName)
+	})
+
 	return profiles, nil
-}
-
-type blocksByStart []ProfileBlock
-
-func (b blocksByStart) Len() int      { return len(b) }
-func (b blocksByStart) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
-func (b blocksByStart) Less(i, j int) bool {
-	bi, bj := b[i], b[j]
-	return bi.StartLine < bj.StartLine || bi.StartLine == bj.StartLine && bi.StartCol < bj.StartCol
 }
 
 var lineRe = regexp.MustCompile(`^(.+):([0-9]+).([0-9]+),([0-9]+).([0-9]+) ([0-9]+) ([0-9]+)$`)
 
-func toInt(s string) int {
-	i, err := strconv.Atoi(s)
-	if err != nil {
-		panic(err)
-	}
-	return i
-}
-
 // Boundary represents the position in a source file of the beginning or end of a
 // block as reported by the coverage profile. In HTML mode, it will correspond to
-// the opening or closing of a <span> tag and will be used to colorize the source
+// the opening or closing of a <span> tag and will be used to colorize the source.
 type Boundary struct {
 	Offset int     // Location as a byte offset in the source file.
 	Start  bool    // Is this the start of a block?
@@ -127,41 +140,27 @@ type Boundary struct {
 }
 
 // Boundaries returns a Profile as a set of Boundary objects within the provided src.
-func (p *Profile) Boundaries(src []byte) (boundaries []Boundary) {
-	// Find maximum count.
-	max := 0
+func (p *Profile) Boundaries(src []byte) []Boundary {
+	var boundaries []Boundary
+	maxCount := 0
 	for _, b := range p.Blocks {
-		if b.Count > max {
-			max = b.Count
+		if b.Count > maxCount {
+			maxCount = b.Count
 		}
 	}
-	// Divisor for normalization.
-	divisor := math.Log(float64(max))
+	divisor := math.Log(float64(maxCount))
 
-	// boundary returns a Boundary, populating the Norm field with a normalized Count.
-	boundary := func(offset int, start bool, count int) Boundary {
-		b := Boundary{Offset: offset, Start: start, Count: count}
-		if !start || count == 0 {
-			return b
-		}
-		if max <= 1 {
-			b.Norm = 0.8 // Profile is in"set" mode; we want a heat map. Use cov8 in the CSS.
-		} else if count > 0 {
-			b.Norm = math.Log(float64(count)) / divisor
-		}
-		return b
-	}
-
-	line, col := 1, 2 // TODO: Why is this 2?
+	line, col := 1, 2
 	for si, bi := 0, 0; si < len(src) && bi < len(p.Blocks); {
 		b := p.Blocks[bi]
 		if b.StartLine == line && b.StartCol == col {
-			boundaries = append(boundaries, boundary(si, true, b.Count))
+			boundaries = append(boundaries, createBoundary(si, true, b.Count, maxCount, divisor))
 		}
 		if b.EndLine == line && b.EndCol == col {
-			boundaries = append(boundaries, boundary(si, false, 0))
+			boundaries = append(boundaries, createBoundary(si, false, 0, maxCount, divisor))
 			bi++
-			continue // Don't advance through src; maybe the next block starts here.
+
+			continue
 		}
 		if src[si] == '\n' {
 			line++
@@ -170,33 +169,54 @@ func (p *Profile) Boundaries(src []byte) (boundaries []Boundary) {
 		col++
 		si++
 	}
-	sort.Sort(boundariesByPos(boundaries))
-	return
+
+	slices.SortFunc(boundaries, compareBoundaries)
+
+	return boundaries
 }
 
-type boundariesByPos []Boundary
-
-func (b boundariesByPos) Len() int      { return len(b) }
-func (b boundariesByPos) Swap(i, j int) { b[i], b[j] = b[j], b[i] }
-func (b boundariesByPos) Less(i, j int) bool {
-	if b[i].Offset == b[j].Offset {
-		return !b[i].Start && b[j].Start
+func createBoundary(offset int, start bool, count int, maxCount int, divisor float64) Boundary {
+	b := Boundary{Offset: offset, Start: start, Count: count}
+	if !start || count == 0 {
+		return b
 	}
-	return b[i].Offset < b[j].Offset
+	if maxCount <= 1 {
+		b.Norm = 0.8
+
+		return b
+	}
+	if count > 0 {
+		b.Norm = math.Log(float64(count)) / divisor
+	}
+
+	return b
+}
+
+func compareBoundaries(a, b Boundary) int {
+	if c := cmp.Compare(a.Offset, b.Offset); c != 0 {
+		return c
+	}
+	if !a.Start && b.Start {
+		return -1
+	}
+	if a.Start && !b.Start {
+		return 1
+	}
+
+	return 0
 }
 
 // findFile finds the location of the named file in GOROOT, GOPATH etc.
 func findFile(file string) (string, error) {
-	if strings.HasPrefix(file, "_") {
-		file = file[1:]
-	}
+	file = strings.TrimPrefix(file, "_")
 	if _, err := os.Stat(file); err == nil {
 		return file, nil
 	}
 	dir, file := filepath.Split(file)
 	pkg, err := build.Import(dir, ".", build.FindOnly)
 	if err != nil {
-		return "", fmt.Errorf("can't find %q: %v", file, err)
+		return "", fmt.Errorf("can't find %q: %w", file, err)
 	}
+
 	return filepath.Join(pkg.Dir, file), nil
 }

@@ -1,218 +1,289 @@
-package main
+package cobertura_test
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cobertura "github.com/blackbirdworks/gocover-cobertura"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const SaveTestResults = false
 
-type dirInfo struct {
-	PkgPath string
+var errTestWriter = errors.New("writer failed")
+
+type failWriter struct {
+	failAfter int
+	written   int
 }
 
-func TestMain(t *testing.T) {
-	fname := filepath.Join(os.TempDir(), "stdout")
-	temp, _ := os.Create(fname)
-	os.Stdout = temp
-	main()
-	outputBytes, err := ioutil.ReadFile(fname)
-	if err != nil {
-		t.Fail()
+func (f *failWriter) Write(p []byte) (int, error) {
+	if f.written+len(p) > f.failAfter {
+		return 0, errTestWriter
 	}
+	f.written += len(p)
+
+	return len(p), nil
+}
+
+func TestConvert_Synchronous(t *testing.T) {
+	t.Parallel()
+
+	in := strings.NewReader("mode: set\ntestdata/func1.go:4.14,5.16 1 1\n")
+	var out bytes.Buffer
+	err := cobertura.Convert(in, &out)
+	require.NoError(t, err)
+	assert.NotEmpty(t, out.String())
+}
+
+func TestConvert_XMLHeaders(t *testing.T) {
+	t.Parallel()
+	fname := filepath.Join(t.TempDir(), "stdout")
+
+	temp, err := os.Create(fname)
+	require.NoError(t, err)
+
+	err = cobertura.Convert(os.Stdin, temp)
+	require.NoError(t, err)
+	require.NoError(t, temp.Close())
+
+	outputBytes, err := os.ReadFile(fname)
+	require.NoError(t, err)
+
 	outputString := string(outputBytes)
-	if !strings.Contains(outputString, xml.Header) {
-		t.Fail()
+	assert.Contains(t, outputString, xml.Header)
+	assert.Contains(t, outputString, cobertura.CoberturaDTDDecl)
+}
+
+func TestConvert_Errors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		input         string
+		expectedError string
+		closeWriter   bool
+	}{
+		{
+			name:          "parse profiles error",
+			input:         "invalid data",
+			expectedError: "failed to parse profiles",
+			closeWriter:   false,
+		},
+		{
+			name:          "process profiles error",
+			input:         "mode: set\nnonexistent.go:1.1,2.2 1 1\n",
+			expectedError: "failed to process profiles",
+			closeWriter:   false,
+		},
+		{
+			name:          "output error (closed pipe)",
+			input:         "mode: set",
+			expectedError: "io: read/write on closed pipe",
+			closeWriter:   true,
+		},
 	}
-	if !strings.Contains(outputString, coberturaDTDDecl) {
-		t.Fail()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pipe2rd, pipe2wr := io.Pipe()
+			if tt.closeWriter {
+				require.NoError(t, pipe2wr.Close())
+			}
+			defer func() { _ = pipe2rd.Close(); _ = pipe2wr.Close() }()
+
+			err := cobertura.Convert(strings.NewReader(tt.input), pipe2wr)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedError)
+		})
 	}
 }
 
-func TestConvertParseProfilesError(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil || r != "Can't parse profiles" {
-			t.Errorf("The code did not panic as expected; r = %+v", r)
-		}
-	}()
+func TestConvert_WriteErrors(t *testing.T) {
+	t.Parallel()
 
-	pipe2rd, pipe2wr := io.Pipe()
-	defer func() { pipe2rd.Close(); pipe2wr.Close() }()
-	convert(strings.NewReader("invalid data"), pipe2wr)
+	input := "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
+	for _, failAfter := range []int{0, 20, 50, 150, 350} {
+		fw := &failWriter{failAfter: failAfter}
+		bw := bufio.NewWriterSize(fw, 1)
+		err := cobertura.Convert(strings.NewReader(input), bw)
+		require.Error(t, err)
+	}
 }
 
-func TestConvertOutputError(t *testing.T) {
-	defer func() {
-		r := recover()
-		if r == nil || r.(error).Error() != "io: read/write on closed pipe" {
-			t.Errorf("The code did not panic as expected; r = %+v", r)
-		}
-	}()
+func TestParseProfiles_MultipleProfileErrors(t *testing.T) {
+	t.Parallel()
 
-	pipe2rd, pipe2wr := io.Pipe()
-	pipe2wr.Close()
-	defer func() { pipe2rd.Close() }()
-	convert(strings.NewReader("mode: set"), pipe2wr)
+	cov := &cobertura.Coverage{}
+	profiles := []*cobertura.Profile{
+		{FileName: "does-not-exist-1"},
+		{FileName: "does-not-exist-2"},
+	}
+
+	err := cov.ParseProfiles(profiles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "can't find \"does-not-exist-1\"")
+	assert.Contains(t, err.Error(), "can't find \"does-not-exist-2\"")
 }
 
-func TestConvertEmpty(t *testing.T) {
+func TestParseProfile_ParseFileError(t *testing.T) {
+	t.Parallel()
+
+	tmpfile, err := os.CreateTemp(t.TempDir(), "*.go")
+	require.NoError(t, err)
+	_, err = tmpfile.WriteString("package invalid syntax %%%")
+	require.NoError(t, err)
+	require.NoError(t, tmpfile.Close())
+
+	cov := &cobertura.Coverage{}
+	err = cov.ParseProfile(&cobertura.Profile{FileName: tmpfile.Name()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse file failed")
+}
+
+func TestConvert_Empty(t *testing.T) {
+	t.Parallel()
 	data := `mode: set`
 
 	pipe2rd, pipe2wr := io.Pipe()
-	go convert(strings.NewReader(data), pipe2wr)
+	go func() {
+		_ = cobertura.Convert(strings.NewReader(data), pipe2wr)
+		_ = pipe2wr.Close()
+	}()
 
-	v := Coverage{}
+	v := cobertura.Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
-	dec.Decode(&v)
+	require.NoError(t, dec.Decode(&v))
 
-	if v.XMLName.Local != "coverage" {
-		t.Error()
+	assert.Equal(t, "coverage", v.XMLName.Local)
+	assert.NotNil(t, v.Sources)
+	assert.Nil(t, v.Packages)
+}
+
+func TestParseProfile_Errors(t *testing.T) {
+	t.Parallel()
+
+	tmpfile, err := os.CreateTemp(t.TempDir(), "not-readable")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.Remove(tmpfile.Name()) })
+	require.NoError(t, tmpfile.Chmod(000))
+
+	tests := []struct {
+		name          string
+		fileName      string
+		expectedError string
+	}{
+		{
+			name:          "does not exist",
+			fileName:      "does-not-exist",
+			expectedError: "can't find \"does-not-exist\"",
+		},
+		{
+			name:          "not readable",
+			fileName:      os.DevNull,
+			expectedError: "expected 'package', found 'EOF'",
+		},
+		{
+			name:          "permission denied",
+			fileName:      tmpfile.Name(),
+			expectedError: "permission denied",
+		},
 	}
-	if v.Sources == nil {
-		t.Fatal()
-	}
-	if v.Packages != nil {
-		t.Fatal()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			v := cobertura.Coverage{}
+			profile := cobertura.Profile{FileName: tt.fileName}
+			parseErr := v.ParseProfile(&profile)
+
+			require.Error(t, parseErr)
+			assert.Contains(t, parseErr.Error(), tt.expectedError)
+		})
 	}
 }
 
-func TestParseProfileDoesntExist(t *testing.T) {
-	v := Coverage{}
-	profile := Profile{FileName: "does-not-exist"}
-	err := v.parseProfile(&profile)
-	if err == nil || !strings.Contains(err.Error(), `can't find "does-not-exist"`) {
-		t.Fatalf("Expected \"can't find\" error; got: %+v", err)
-	}
-}
+func TestConvert_SetMode(t *testing.T) {
+	t.Parallel()
 
-func TestParseProfileNotReadable(t *testing.T) {
-	v := Coverage{}
-	profile := Profile{FileName: os.DevNull}
-	err := v.parseProfile(&profile)
-	if err == nil || !strings.Contains(err.Error(), `expected 'package', found 'EOF'`) {
-		t.Fatalf("Expected \"expected 'package', found 'EOF'\" error; got: %+v", err)
-	}
-}
-
-func TestParseProfilePermissionDenied(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "not-readable")
-	defer os.Remove(tmpfile.Name())
-	tmpfile.Chmod(000)
-	v := Coverage{}
-	profile := Profile{FileName: tmpfile.Name()}
-	err = v.parseProfile(&profile)
-	if err == nil || !strings.Contains(err.Error(), `permission denied`) {
-		t.Fatalf("Expected \"permission denied\" error; got: %+v", err)
-	}
-}
-
-func TestConvertSetMode(t *testing.T) {
 	pipe1rd, err := os.Open("testdata/testdata_set.txt")
-	if err != nil {
-		t.Fatal("Can't parse testdata.")
-	}
+	require.NoError(t, err, "Can't parse testdata")
 
 	pipe2rd, pipe2wr := io.Pipe()
 
 	var convwr io.Writer = pipe2wr
 	if SaveTestResults {
-		testwr, err := os.Create("testdata/testdata_set.xml")
-		if err != nil {
-			t.Fatal("Can't open output testdata.", err)
-		}
+		testwr, err2 := os.Create("testdata/testdata_set.xml")
+		require.NoError(t, err2, "Can't open output testdata")
 		defer testwr.Close()
 		convwr = io.MultiWriter(convwr, testwr)
 	}
 
-	go convert(pipe1rd, convwr)
+	go func() {
+		_ = cobertura.Convert(pipe1rd, convwr)
+		_ = pipe2wr.Close()
+	}()
 
-	v := Coverage{}
+	v := cobertura.Coverage{}
 	dec := xml.NewDecoder(pipe2rd)
-	dec.Decode(&v)
+	require.NoError(t, dec.Decode(&v))
 
-	if v.XMLName.Local != "coverage" {
-		t.Error()
-	}
-
-	if v.Sources == nil {
-		t.Fatal()
-	}
-
-	if v.Packages == nil || len(v.Packages) != 1 {
-		t.Fatal()
-	}
+	assert.Equal(t, "coverage", v.XMLName.Local)
+	require.NotNil(t, v.Sources)
+	require.Len(t, v.Packages, 1)
 
 	p := v.Packages[0]
-	if strings.TrimRight(p.Name, "/") != "./testdata" {
-		t.Fatal(p.Name)
-	}
-	if p.Classes == nil || len(p.Classes) != 2 {
-		t.Fatal()
-	}
+	assert.Equal(t, "./testdata", strings.TrimRight(p.Name, "/"))
+	assert.Greater(t, float64(p.HitRate()), 0.0)
+
+	require.Len(t, p.Classes, 2)
 
 	c := p.Classes[0]
-	if c.Name != "-" {
-		t.Error()
-	}
-	if c.Filename != "./testdata/func1.go" {
-		t.Errorf("Expected %s but %s", "./testdata/func1.go", c.Filename)
-	}
-	if c.Methods == nil || len(c.Methods) != 1 {
-		t.Fatal()
-	}
-	if c.Lines == nil || len(c.Lines) != 4 {
-		t.Errorf("Expected 4 lines but got %d", len(c.Lines))
-	}
+	assert.Equal(t, "-", c.Name)
+	assert.Equal(t, "./testdata/func1.go", c.Filename)
+	assert.InEpsilon(t, 0.25, c.HitRate(), 0.01)
+
+	require.Len(t, c.Methods, 1)
+	require.Len(t, c.Lines, 4)
 
 	m := c.Methods[0]
-	if m.Name != "Func1" {
-		t.Error()
-	}
-	if c.Lines == nil || len(c.Lines) != 4 {
-		t.Errorf("Expected 4 lines but got %d", len(c.Lines))
+	assert.Equal(t, "Func1", m.Name)
+	assert.InEpsilon(t, 0.25, m.HitRate(), 0.01)
+	require.Len(t, m.Lines, 4)
+
+	expectedLines := []struct {
+		number int
+		hits   int64
+	}{
+		{4, int64(1)},
+		{5, int64(0)},
+		{6, int64(0)},
+		{7, int64(0)},
 	}
 
-	var l *Line
-	if l = m.Lines[0]; l.Number != 4 || l.Hits != 1 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = m.Lines[1]; l.Number != 5 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = m.Lines[2]; l.Number != 6 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = m.Lines[3]; l.Number != 7 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
+	for i, expected := range expectedLines {
+		l := m.Lines[i]
+		assert.Equal(t, expected.number, l.Number)
+		assert.Equal(t, expected.hits, l.Hits)
 
-	if l = c.Lines[0]; l.Number != 4 || l.Hits != 1 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = c.Lines[1]; l.Number != 5 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = c.Lines[2]; l.Number != 6 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
-	}
-	if l = c.Lines[3]; l.Number != 7 || l.Hits != 0 {
-		t.Errorf("unmatched line: Number:%d, Hits:%d", l.Number, l.Hits)
+		cl := c.Lines[i]
+		assert.Equal(t, expected.number, cl.Number)
+		assert.Equal(t, expected.hits, cl.Hits)
 	}
 
 	c = p.Classes[1]
-	if c.Name != "Type1" {
-		t.Error()
-	}
-	if c.Filename != "./testdata/func2.go" {
-		t.Errorf("Expected %s but %s", "./testdata/func2.go", c.Filename)
-	}
-	if c.Methods == nil || len(c.Methods) != 3 {
-		t.Fatal()
-	}
+	assert.Equal(t, "Type1", c.Name)
+	assert.Equal(t, "./testdata/func2.go", c.Filename)
+	assert.Len(t, c.Methods, 3)
 }

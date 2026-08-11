@@ -1,35 +1,57 @@
-[![Build Status](https://travis-ci.org/t-yuki/gocover-cobertura.svg?branch=master)](https://travis-ci.org/t-yuki/gocover-cobertura)
-[![Coverage Status](https://coveralls.io/repos/github/t-yuki/gocover-cobertura/badge.svg?branch=master)](https://coveralls.io/github/t-yuki/gocover-cobertura?branch=master)
+# gocover-cobertura
 
-go tool cover XML (Cobertura) export
-====================================
+[![Build Status](https://github.com/BlackbirdWorks/gocover-cobertura/actions/workflows/ci.yml/badge.svg)](https://github.com/BlackbirdWorks/gocover-cobertura/actions/workflows/ci.yml)
 
-This is a simple helper tool for generating XML output in [Cobertura](http://cobertura.sourceforge.net/) format
-for CIs like [Jenkins](https://wiki.jenkins-ci.org/display/JENKINS/Cobertura+Plugin) and others
-from [go tool cover](https://code.google.com/p/go.tools/) output.
+Convert Go cover profiles to [Cobertura](http://cobertura.sourceforge.net/) XML format.
+This is useful for generating coverage reports in CI pipelines (like Jenkins, GitLab CI, GitHub Actions) from `go test -coverprofile` output.
 
-Installation
-------------
+## Installation
 
-Just type the following to install the program and its dependencies:
+Install the latest version using `go install`:
 
-    $ go get code.google.com/p/go.tools/cmd/cover
-    $ go get github.com/t-yuki/gocover-cobertura
+```bash
+go install github.com/blackbirdworks/gocover-cobertura/cmd/gocover-cobertura@latest
+```
 
-Usage
------
+## Usage
 
-`gocover-cobertura` reads from the standard input:
+`gocover-cobertura` supports reading from stdin or reading directly from files, including glob patterns.
 
-    $ go test -coverprofile=coverage.txt -covermode count github.com/gorilla/mux
-    $ gocover-cobertura < coverage.txt > coverage.xml
+```bash
+Usage: gocover-cobertura [flags]
 
-Authors
--------
+Convert Go cover profile to Cobertura XML format
 
-* [Yukinari Toyota (t-yuki)](https://github.com/t-yuki)
+Flags:
+  -h, --help          Show context-sensitive help.
+  -f, --file="-"      Input coverage file path (default '-' for stdin)
+  -p, --pattern=""    Glob pattern for matching files (e.g. '**/*.out')
+  -o, --output="-"    Output Cobertura XML file path (default '-' for stdout)
+```
 
-Thanks
-------
+### Examples
 
-This tool is originated from [gocov-xml](https://github.com/AlekSi/gocov-xml) by [Alexey Palazhchenko (AlekSi)](https://github.com/AlekSi)
+**Standard Unix pipes:**
+```bash
+go test -coverprofile=coverage.out ./...
+gocover-cobertura < coverage.out > coverage.xml
+```
+
+**Using the `--file` flag:**
+```bash
+gocover-cobertura -f coverage.out -o coverage.xml
+```
+
+**Using glob patterns for multiple coverage files:**
+```bash
+gocover-cobertura --pattern="tests/**/*.out" -o coverage.xml
+```
+
+## Authors
+
+* [BlackbirdWorks](https://github.com/BlackbirdWorks) (Current Maintainers)
+* [Yukinari Toyota (t-yuki)](https://github.com/t-yuki) (Original Author)
+
+## Thanks
+
+This tool originated from [gocov-xml](https://github.com/AlekSi/gocov-xml) by [Alexey Palazhchenko (AlekSi)](https://github.com/AlekSi).
