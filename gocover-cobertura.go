@@ -22,7 +22,12 @@ const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourcefor
 // Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
 func Convert(in io.Reader, out io.Writer) error {
 	bufIn := bufio.NewReader(in)
-	bufOut := bufio.NewWriter(out)
+	var bufOut *bufio.Writer
+	if bw, ok := out.(*bufio.Writer); ok {
+		bufOut = bw
+	} else {
+		bufOut = bufio.NewWriter(out)
+	}
 
 	profiles, err := ParseProfiles(bufIn)
 	if err != nil {
@@ -99,15 +104,16 @@ func (cov *Coverage) ParseProfile(profile *Profile) error {
 	if err != nil {
 		return fmt.Errorf("find file failed: %w", err)
 	}
-	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, absFilePath, nil, 0)
-	if err != nil {
-		return fmt.Errorf("parse file failed: %w", err)
-	}
 
 	data, err := os.ReadFile(absFilePath)
 	if err != nil {
 		return fmt.Errorf("read file failed: %w", err)
+	}
+
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
+	if err != nil {
+		return fmt.Errorf("parse file failed: %w", err)
 	}
 
 	pkgPath, _ := filepath.Split(fileName)
@@ -123,6 +129,7 @@ func (cov *Coverage) ParseProfile(profile *Profile) error {
 		pkg = &Package{Name: pkgPath, Classes: []*Class{}}
 		cov.Packages = append(cov.Packages, pkg)
 	}
+
 	visitor := &fileVisitor{
 		fset:     fset,
 		fileName: fileName,

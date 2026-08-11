@@ -27,17 +27,17 @@ type CLI struct {
 
 // Run executes the CLI logic using guard clauses without else statements.
 func (c *CLI) Run() error {
-	in, closeIn, err := c.openInput()
+	in, err := c.openInput()
 	if err != nil {
 		return err
 	}
-	defer closeIn()
+	defer in.Close()
 
-	out, closeOut, err := c.openOutput()
+	out, err := c.openOutput()
 	if err != nil {
 		return err
 	}
-	defer closeOut()
+	defer out.Close()
 
 	if err = cobertura.Convert(in, out); err != nil {
 		return fmt.Errorf("conversion failed: %w", err)
@@ -46,7 +46,7 @@ func (c *CLI) Run() error {
 	return nil
 }
 
-func (c *CLI) openInput() (io.Reader, func(), error) {
+func (c *CLI) openInput() (io.ReadCloser, error) {
 	if c.Pattern != "" {
 		return c.openPatternInput()
 	}
@@ -54,59 +54,80 @@ func (c *CLI) openInput() (io.Reader, func(), error) {
 	if c.File != "" && c.File != "-" {
 		f, err := os.Open(c.File)
 		if err != nil {
-			return nil, func() {}, fmt.Errorf("failed to open input file %q: %w", c.File, err)
+			return nil, fmt.Errorf("failed to open input file %q: %w", c.File, err)
 		}
 
-		return f, func() { _ = f.Close() }, nil
+		return f, nil
 	}
 
-	return os.Stdin, func() {}, nil
+	return io.NopCloser(os.Stdin), nil
 }
 
-func (c *CLI) openPatternInput() (io.Reader, func(), error) {
+func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 	matches, err := findMatchingFiles(c.Pattern)
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("failed to process pattern %q: %w", c.Pattern, err)
+		return nil, fmt.Errorf("failed to process pattern %q: %w", c.Pattern, err)
 	}
 	if len(matches) == 0 {
-		return nil, func() {}, fmt.Errorf("%w %q", ErrNoMatches, c.Pattern)
+		return nil, fmt.Errorf("%w %q", ErrNoMatches, c.Pattern)
 	}
 
-	var files []*os.File
+	var closers []io.Closer
 	var readers []io.Reader
 	for _, match := range matches {
 		fileHandle, openErr := os.Open(match)
 		if openErr != nil {
-			for _, opened := range files {
-				_ = opened.Close()
+			for _, c := range closers {
+				_ = c.Close()
 			}
 
-			return nil, func() {}, fmt.Errorf("failed to open matched file %q: %w", match, openErr)
+			return nil, fmt.Errorf("failed to open matched file %q: %w", match, openErr)
 		}
-		files = append(files, fileHandle)
+		closers = append(closers, fileHandle)
 		readers = append(readers, fileHandle)
 	}
 
-	cleanup := func() {
-		for _, f := range files {
-			_ = f.Close()
+	return &multiReadCloser{
+		Reader:  io.MultiReader(readers...),
+		closers: closers,
+	}, nil
+}
+
+type multiReadCloser struct {
+	io.Reader
+	closers []io.Closer
+}
+
+func (m *multiReadCloser) Close() error {
+	var errs []error
+	for _, c := range m.closers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
-	return io.MultiReader(readers...), cleanup, nil
+	return errors.Join(errs...)
 }
 
-func (c *CLI) openOutput() (io.Writer, func(), error) {
+func (c *CLI) openOutput() (io.WriteCloser, error) {
 	if c.Output == "" || c.Output == "-" {
-		return os.Stdout, func() {}, nil
+		return nopWriteCloser{Writer: os.Stdout}, nil
 	}
 
 	f, err := os.Create(c.Output)
 	if err != nil {
-		return nil, func() {}, fmt.Errorf("failed to create output file %q: %w", c.Output, err)
+		return nil, fmt.Errorf("failed to create output file %q: %w", c.Output, err)
 	}
 
-	return f, func() { _ = f.Close() }, nil
+	return f, nil
+}
+
+type nopWriteCloser struct {
+	io.Writer
+}
+
+func (nopWriteCloser) Close() error {
+	return nil
 }
 
 // findMatchingFiles finds files matching a pattern, supporting recursive ** matching.
@@ -180,12 +201,22 @@ func isMatched(path, relPath, subPattern string) bool {
 	return false
 }
 
-// RunCLI initializes Kong and executes the CLI application.
-func RunCLI() {
+// RunCLI initializes Kong with arguments and executes the CLI application.
+func RunCLI(args []string) error {
 	var cli CLI
-	kctx := kong.Parse(&cli,
+	parser, err := kong.New(&cli,
 		kong.Name("gocover-cobertura"),
 		kong.Description("Convert Go cover profile to Cobertura XML format"),
+		kong.Exit(func(int) {}),
 	)
-	kctx.FatalIfErrorf(cli.Run())
+	if err != nil {
+		return err
+	}
+
+	_, err = parser.Parse(args)
+	if err != nil {
+		return err
+	}
+
+	return cli.Run()
 }

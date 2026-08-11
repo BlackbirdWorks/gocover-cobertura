@@ -1,7 +1,10 @@
 package cobertura_test
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +17,32 @@ import (
 )
 
 const SaveTestResults = false
+
+var errTestWriter = errors.New("writer failed")
+
+type failWriter struct {
+	failAfter int
+	written   int
+}
+
+func (f *failWriter) Write(p []byte) (int, error) {
+	if f.written+len(p) > f.failAfter {
+		return 0, errTestWriter
+	}
+	f.written += len(p)
+
+	return len(p), nil
+}
+
+func TestConvert_Synchronous(t *testing.T) {
+	t.Parallel()
+
+	in := strings.NewReader("mode: set\ntestdata/func1.go:4.14,5.16 1 1\n")
+	var out bytes.Buffer
+	err := cobertura.Convert(in, &out)
+	require.NoError(t, err)
+	assert.NotEmpty(t, out.String())
+}
 
 func TestConvert_XMLHeaders(t *testing.T) {
 	t.Parallel()
@@ -46,14 +75,20 @@ func TestConvert_Errors(t *testing.T) {
 		{
 			name:          "parse profiles error",
 			input:         "invalid data",
-			closeWriter:   false,
 			expectedError: "failed to parse profiles",
+			closeWriter:   false,
+		},
+		{
+			name:          "process profiles error",
+			input:         "mode: set\nnonexistent.go:1.1,2.2 1 1\n",
+			expectedError: "failed to process profiles",
+			closeWriter:   false,
 		},
 		{
 			name:          "output error (closed pipe)",
 			input:         "mode: set",
-			closeWriter:   true,
 			expectedError: "io: read/write on closed pipe",
+			closeWriter:   true,
 		},
 	}
 
@@ -72,6 +107,48 @@ func TestConvert_Errors(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
+}
+
+func TestConvert_WriteErrors(t *testing.T) {
+	t.Parallel()
+
+	input := "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
+	for _, failAfter := range []int{0, 20, 50, 150, 350} {
+		fw := &failWriter{failAfter: failAfter}
+		bw := bufio.NewWriterSize(fw, 1)
+		err := cobertura.Convert(strings.NewReader(input), bw)
+		require.Error(t, err)
+	}
+}
+
+func TestParseProfiles_MultipleProfileErrors(t *testing.T) {
+	t.Parallel()
+
+	cov := &cobertura.Coverage{}
+	profiles := []*cobertura.Profile{
+		{FileName: "does-not-exist-1"},
+		{FileName: "does-not-exist-2"},
+	}
+
+	err := cov.ParseProfiles(profiles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "can't find \"does-not-exist-1\"")
+	assert.Contains(t, err.Error(), "can't find \"does-not-exist-2\"")
+}
+
+func TestParseProfile_ParseFileError(t *testing.T) {
+	t.Parallel()
+
+	tmpfile, err := os.CreateTemp(t.TempDir(), "*.go")
+	require.NoError(t, err)
+	_, err = tmpfile.WriteString("package invalid syntax %%%")
+	require.NoError(t, err)
+	require.NoError(t, tmpfile.Close())
+
+	cov := &cobertura.Coverage{}
+	err = cov.ParseProfile(&cobertura.Profile{FileName: tmpfile.Name()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse file failed")
 }
 
 func TestConvert_Empty(t *testing.T) {
@@ -168,19 +245,23 @@ func TestConvert_SetMode(t *testing.T) {
 
 	p := v.Packages[0]
 	assert.Equal(t, "./testdata", strings.TrimRight(p.Name, "/"))
+	assert.Greater(t, float64(p.HitRate()), 0.0)
+
 	require.Len(t, p.Classes, 2)
 
 	c := p.Classes[0]
 	assert.Equal(t, "-", c.Name)
 	assert.Equal(t, "./testdata/func1.go", c.Filename)
+	assert.InEpsilon(t, 0.25, c.HitRate(), 0.01)
+
 	require.Len(t, c.Methods, 1)
 	require.Len(t, c.Lines, 4)
 
 	m := c.Methods[0]
 	assert.Equal(t, "Func1", m.Name)
+	assert.InEpsilon(t, 0.25, m.HitRate(), 0.01)
 	require.Len(t, m.Lines, 4)
 
-	// Expected lines for Func1
 	expectedLines := []struct {
 		number int
 		hits   int64
@@ -196,7 +277,6 @@ func TestConvert_SetMode(t *testing.T) {
 		assert.Equal(t, expected.number, l.Number)
 		assert.Equal(t, expected.hits, l.Hits)
 
-		// Assert class lines match method lines
 		cl := c.Lines[i]
 		assert.Equal(t, expected.number, cl.Number)
 		assert.Equal(t, expected.hits, cl.Hits)
