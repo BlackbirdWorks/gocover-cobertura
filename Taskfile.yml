@@ -13,6 +13,10 @@ tasks:
     desc: Run golangci-lint
     cmd: golangci-lint run ./...
 
+  lint-fix:
+    desc: Run golangci-lint with --fix (applies modernize and formatting)
+    cmd: golangci-lint run --fix ./...
+
   vulncheck:
     desc: Run govulncheck
     cmd: govulncheck ./...
