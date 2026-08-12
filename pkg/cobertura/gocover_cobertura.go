@@ -2,6 +2,7 @@ package cobertura
 
 import (
 	"bufio"
+	"cmp"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -12,7 +13,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -75,15 +78,43 @@ func Convert(in io.Reader, out io.Writer) error {
 	return nil
 }
 
-// ParseProfiles processes a slice of coverage profiles and populates the Coverage metrics.
+// ParseProfiles processes a slice of coverage profiles concurrently and populates the Coverage metrics.
 func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	cov.Packages = []*Package{}
-	var errs []error
+	if len(profiles) == 0 {
+		cov.LinesValid = 0
+		cov.LinesCovered = 0
+		cov.LineRate = 0
+
+		return nil
+	}
+
+	var (
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		errs []error
+	)
 
 	for _, profile := range profiles {
-		if err := cov.ParseProfile(profile); err != nil {
-			errs = append(errs, err)
-		}
+		wg.Add(1)
+		go func(prof *Profile) {
+			defer wg.Done()
+			if err := cov.parseProfileConcurrent(prof, &mu); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}(profile)
+	}
+	wg.Wait()
+
+	slices.SortFunc(cov.Packages, func(a, b *Package) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+	for _, pkg := range cov.Packages {
+		slices.SortFunc(pkg.Classes, func(a, b *Class) int {
+			return cmp.Compare(a.Filename, b.Filename)
+		})
 	}
 
 	cov.LinesValid = cov.NumLines()
@@ -99,6 +130,12 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 
 // ParseProfile processes a single Profile and updates the Coverage model.
 func (cov *Coverage) ParseProfile(profile *Profile) error {
+	var mu sync.Mutex
+
+	return cov.parseProfileConcurrent(profile, &mu)
+}
+
+func (cov *Coverage) parseProfileConcurrent(profile *Profile, mu *sync.Mutex) error {
 	fileName := profile.FileName
 	absFilePath, err := findFile(fileName)
 	if err != nil {
@@ -119,10 +156,24 @@ func (cov *Coverage) ParseProfile(profile *Profile) error {
 	pkgPath, _ := filepath.Split(fileName)
 	pkgPath = strings.TrimRight(pkgPath, string(os.PathSeparator))
 
+	visitor := &fileVisitor{
+		fset:     fset,
+		fileName: fileName,
+		fileData: data,
+		classes:  make(map[string]*Class),
+		profile:  profile,
+	}
+	ast.Walk(visitor, parsed)
+
+	mu.Lock()
+	defer mu.Unlock()
+
 	var pkg *Package
 	for _, p := range cov.Packages {
 		if p.Name == pkgPath {
 			pkg = p
+
+			break
 		}
 	}
 	if pkg == nil {
@@ -130,15 +181,9 @@ func (cov *Coverage) ParseProfile(profile *Profile) error {
 		cov.Packages = append(cov.Packages, pkg)
 	}
 
-	visitor := &fileVisitor{
-		fset:     fset,
-		fileName: fileName,
-		fileData: data,
-		classes:  make(map[string]*Class),
-		pkg:      pkg,
-		profile:  profile,
+	for _, class := range visitor.classes {
+		pkg.Classes = append(pkg.Classes, class)
 	}
-	ast.Walk(visitor, parsed)
 	pkg.LineRate = pkg.HitRate()
 
 	return nil
@@ -146,7 +191,6 @@ func (cov *Coverage) ParseProfile(profile *Profile) error {
 
 type fileVisitor struct {
 	fset     *token.FileSet
-	pkg      *Package
 	classes  map[string]*Class
 	profile  *Profile
 	fileName string
@@ -200,7 +244,6 @@ func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 	if class == nil {
 		class = &Class{Name: className, Filename: v.fileName, Methods: []*Method{}, Lines: []*Line{}}
 		v.classes[className] = class
-		v.pkg.Classes = append(v.pkg.Classes, class)
 	}
 
 	return class
