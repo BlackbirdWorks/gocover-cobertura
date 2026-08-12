@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -11,10 +10,20 @@ import (
 
 	"github.com/alecthomas/kong"
 	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // ErrNoMatches is returned when a glob pattern does not match any files.
 var ErrNoMatches = errors.New("no files matched pattern")
+
+var (
+	ErrConversionFailed = errors.New("conversion failed")
+	ErrOpenFile         = errors.New("failed to open input file")
+	ErrProcessPattern   = errors.New("failed to process pattern")
+	ErrOpenMatched      = errors.New("failed to open matched file")
+	ErrReadMatched      = errors.New("failed to read matched file")
+	ErrCreateOutput     = errors.New("failed to create output file")
+)
 
 const globSplitParts = 2
 
@@ -40,7 +49,7 @@ func (c *CLI) Run() error {
 	defer out.Close()
 
 	if err = cobertura.Convert(in, out); err != nil {
-		return fmt.Errorf("conversion failed: %w", err)
+		return errs.Wrap(err, ErrConversionFailed)
 	}
 
 	return nil
@@ -54,7 +63,7 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 	if c.File != "" && c.File != "-" {
 		f, err := os.Open(c.File)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open input file %q: %w", c.File, err)
+			return nil, errs.Wrapf(err, ErrOpenFile, "%q", c.File)
 		}
 
 		return f, nil
@@ -66,47 +75,42 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 	matches, err := findMatchingFiles(c.Pattern)
 	if err != nil {
-		return nil, fmt.Errorf("failed to process pattern %q: %w", c.Pattern, err)
+		return nil, errs.Wrapf(err, ErrProcessPattern, "%q", c.Pattern)
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w %q", ErrNoMatches, c.Pattern)
+		return nil, errs.Wrapf(ErrNoMatches, ErrProcessPattern, "%q", c.Pattern)
 	}
 
-	var closers []io.Closer
-	var readers []io.Reader
-	for _, match := range matches {
-		fileHandle, openErr := os.Open(match)
-		if openErr != nil {
-			for _, c := range closers {
-				_ = c.Close()
+	pr, pw := io.Pipe()
+	go func() {
+		for _, match := range matches {
+			processErr := func() error {
+				f, openErr := os.Open(match)
+				if openErr != nil {
+					return errs.Wrapf(openErr, ErrOpenMatched, "%q", match)
+				}
+				defer f.Close()
+
+				_, copyErr := io.Copy(pw, f)
+				if copyErr != nil {
+					return errs.Wrapf(copyErr, ErrReadMatched, "%q", match)
+				}
+
+				return nil
+			}()
+			if processErr != nil {
+				if errors.Is(processErr, io.ErrClosedPipe) {
+					return
+				}
+				_ = pw.CloseWithError(processErr)
+
+				return
 			}
-
-			return nil, fmt.Errorf("failed to open matched file %q: %w", match, openErr)
 		}
-		closers = append(closers, fileHandle)
-		readers = append(readers, fileHandle)
-	}
+		_ = pw.Close()
+	}()
 
-	return &multiReadCloser{
-		Reader:  io.MultiReader(readers...),
-		closers: closers,
-	}, nil
-}
-
-type multiReadCloser struct {
-	io.Reader
-	closers []io.Closer
-}
-
-func (m *multiReadCloser) Close() error {
-	var errs []error
-	for _, c := range m.closers {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
+	return pr, nil
 }
 
 func (c *CLI) openOutput() (io.WriteCloser, error) {
@@ -116,7 +120,7 @@ func (c *CLI) openOutput() (io.WriteCloser, error) {
 
 	f, err := os.Create(c.Output)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create output file %q: %w", c.Output, err)
+		return nil, errs.Wrapf(err, ErrCreateOutput, "%q", c.Output)
 	}
 
 	return f, nil

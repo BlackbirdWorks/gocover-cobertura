@@ -1,69 +1,17 @@
 package main
 
 import (
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var errTestClose = errors.New("close error")
-
-type failCloser struct{}
-
-func (failCloser) Close() error {
-	return errTestClose
-}
-
-func TestMultiReadCloser_Close(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		errContains string
-		closers     []io.Closer
-		expectErr   bool
-	}{
-		{
-			name:      "no errors",
-			closers:   []io.Closer{},
-			expectErr: false,
-		},
-		{
-			name:        "close error",
-			closers:     []io.Closer{failCloser{}},
-			expectErr:   true,
-			errContains: "close error",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			mc := &multiReadCloser{
-				Reader:  os.Stdin,
-				closers: tt.closers,
-			}
-
-			err := mc.Close()
-			if tt.expectErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
+//nolint:paralleltest // changing working directory is not safe for parallel tests
 func TestCLI_Run(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		setup       func(t *testing.T) CLI
 		validate    func(t *testing.T, cli CLI)
@@ -75,11 +23,12 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with valid file",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
 
 				return CLI{
 					File:   "testdata/testdata_set.txt",
-					Output: filepath.Join(tmpDir, "output.xml"),
+					Output: "output.xml",
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -99,11 +48,12 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with pattern glob",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
 
 				return CLI{
 					Pattern: "testdata/**/*.txt",
-					Output:  filepath.Join(tmpDir, "output.xml"),
+					Output:  "output.xml",
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -115,11 +65,12 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with pattern double star only",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
 
 				return CLI{
 					Pattern: "**/testdata_set.txt",
-					Output:  filepath.Join(tmpDir, "output.xml"),
+					Output:  "output.xml",
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -131,11 +82,12 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with pattern double star empty",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
 
 				return CLI{
 					Pattern: "**",
-					Output:  filepath.Join(tmpDir, "output.xml"),
+					Output:  "output.xml",
 				}
 			},
 			validate: func(t *testing.T, _ CLI) {
@@ -148,11 +100,12 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with pattern non-recursive glob",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
 
 				return CLI{
 					Pattern: "testdata/*.txt",
-					Output:  filepath.Join(tmpDir, "output.xml"),
+					Output:  "output.xml",
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -218,15 +171,16 @@ func TestCLI_Run(t *testing.T) {
 			name: "run with pattern unreadable file",
 			setup: func(t *testing.T) CLI {
 				t.Helper()
-				tmpDir := t.TempDir()
-				validFile := filepath.Join(tmpDir, "1_valid.out")
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
+				validFile := "1_valid.out"
 				err := os.WriteFile(validFile, []byte("mode: set\n"), 0644)
 				require.NoError(t, err)
-				unreadableFile := filepath.Join(tmpDir, "2_unreadable.out")
+				unreadableFile := "2_unreadable.out"
 				err = os.WriteFile(unreadableFile, []byte("mode: set\n"), 0000)
 				require.NoError(t, err)
 
-				return CLI{Pattern: filepath.Join(tmpDir, "*.out"), Output: "-"}
+				return CLI{Pattern: "*.out", Output: "-"}
 			},
 			expectErr:   true,
 			errContains: "failed to open matched file",
@@ -235,9 +189,8 @@ func TestCLI_Run(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			cli := tt.setup(t)
+
 			err := cli.Run()
 
 			if tt.expectErr {
@@ -334,17 +287,21 @@ func TestIsMatched(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // changing working directory is not safe for parallel tests
 func TestRunMain(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name         string
 		args         []string
 		expectedCode int
 	}{
 		{
-			name:         "successful run",
-			args:         []string{"-f", "testdata/testdata_set.txt", "-o", os.DevNull},
+			name: "successful run",
+			args: []string{
+				"-f",
+				"testdata/testdata_set.txt",
+				"-o",
+				os.DevNull,
+			},
 			expectedCode: 0,
 		},
 		{
@@ -361,7 +318,10 @@ func TestRunMain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			if tt.name == "successful run" {
+				tmpDir := testfixtures.WriteToTempDir(t)
+				t.Chdir(tmpDir)
+			}
 
 			code := runMain(tt.args)
 			assert.Equal(t, tt.expectedCode, code)

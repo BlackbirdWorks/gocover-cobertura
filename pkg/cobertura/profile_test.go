@@ -160,13 +160,25 @@ func TestParseProfile_BuildImport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cov := &cobertura.Coverage{}
-			err := cov.ParseProfile(tt.profile)
+			p := cobertura.NewParser()
+			_, err := p.Parse(strings.NewReader("mode: set\n" + tt.profile.FileName + ":1.1,2.2 1 1\n"))
 			if tt.expectErr {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 			}
 		})
+	}
+}
+
+func BenchmarkCoverageLine_UnmarshalText(b *testing.B) {
+	line := []byte("github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1")
+	var covLine cobertura.CoverageLine
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		_ = covLine.UnmarshalText(line)
 	}
 }

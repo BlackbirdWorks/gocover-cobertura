@@ -6,8 +6,8 @@ tasks:
     deps: [lint, vulncheck, test]
 
   test:
-    desc: Run Go tests
-    cmd: go test -v -coverprofile=coverage.txt ./...
+    desc: Run Go tests with race detector
+    cmd: go test -v -race -coverprofile=coverage.txt ./...
 
   lint:
     desc: Run golangci-lint

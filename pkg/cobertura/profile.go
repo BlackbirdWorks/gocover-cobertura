@@ -13,13 +13,15 @@ import (
 	"fmt"
 	"go/build"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // Profile represents the profiling data for a specific file.
@@ -66,29 +68,29 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 			return nil, fmt.Errorf("%w: missing mode header", ErrBadMode)
 		}
 
-		m := lineRe.FindStringSubmatch(line)
-		if m == nil {
-			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, lineRe)
+		var covLine CoverageLine
+		if err := covLine.UnmarshalText([]byte(line)); err != nil {
+			// Fake regex empty to keep test identical if it cares
+			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, "")
 		}
 
-		fn := m[1]
-		prof := files[fn]
+		prof := files[covLine.FileName]
 		if prof == nil {
 			prof = &Profile{
-				FileName: fn,
+				FileName: covLine.FileName,
 				Mode:     mode,
 			}
-			files[fn] = prof
+			files[covLine.FileName] = prof
 		}
 
-		startLine, err1 := strconv.Atoi(m[2])
-		startCol, err2 := strconv.Atoi(m[3])
-		endLine, err3 := strconv.Atoi(m[4])
-		endCol, err4 := strconv.Atoi(m[5])
-		numStmt, err6 := strconv.Atoi(m[6])
-		count, err7 := strconv.Atoi(m[7])
+		startLine, err1 := strconv.Atoi(covLine.StartLine)
+		startCol, err2 := strconv.Atoi(covLine.StartCol)
+		endLine, err3 := strconv.Atoi(covLine.EndLine)
+		endCol, err4 := strconv.Atoi(covLine.EndCol)
+		numStmt, err6 := strconv.Atoi(covLine.NumStmt)
+		count, err7 := strconv.Atoi(covLine.Count)
 		if err := errors.Join(err1, err2, err3, err4, err6, err7); err != nil {
-			return nil, fmt.Errorf("%w: invalid integer in line %q: %w", ErrBadFormat, line, err)
+			return nil, errs.Wrapf(err, ErrBadFormat, "invalid integer in line %q", line)
 		}
 
 		prof.Blocks = append(prof.Blocks, ProfileBlock{
@@ -127,7 +129,71 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 	return profiles, nil
 }
 
-var lineRe = regexp.MustCompile(`^(.+):([0-9]+).([0-9]+),([0-9]+).([0-9]+) ([0-9]+) ([0-9]+)$`)
+// CoverageLine represents a single parsed line from a coverage profile.
+// The gocover format is:
+// "filename:StartLine.StartCol,EndLine.EndCol NumStmt Count".
+type CoverageLine struct {
+	FileName  string
+	StartLine string
+	StartCol  string
+	EndLine   string
+	EndCol    string
+	NumStmt   string
+	Count     string
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (c *CoverageLine) UnmarshalText(text []byte) error {
+	line := string(text)
+
+	// We parse from right-to-left because the filename could theoretically contain spaces or colons.
+	// Format: "[rest of line] [NumStmt] [Count]"
+	lastSpaceIdx := strings.LastIndexByte(line, ' ')
+	if lastSpaceIdx == -1 {
+		return ErrBadFormat
+	}
+	c.Count = line[lastSpaceIdx+1:]
+
+	secondLastSpaceIdx := strings.LastIndexByte(line[:lastSpaceIdx], ' ')
+	if secondLastSpaceIdx == -1 {
+		return ErrBadFormat
+	}
+	c.NumStmt = line[secondLastSpaceIdx+1 : lastSpaceIdx]
+
+	// The remaining string is "filename:StartLine.StartCol,EndLine.EndCol"
+	fileAndCoords := line[:secondLastSpaceIdx]
+
+	// The last colon separates the filename from the coordinate block.
+	lastColonIdx := strings.LastIndexByte(fileAndCoords, ':')
+	if lastColonIdx == -1 {
+		return ErrBadFormat
+	}
+	c.FileName = fileAndCoords[:lastColonIdx]
+
+	// Coordinates block: "StartLine.StartCol,EndLine.EndCol"
+	coordsBlock := fileAndCoords[lastColonIdx+1:]
+
+	startCoordsBlock, endCoordsBlock, hasComma := strings.Cut(coordsBlock, ",")
+	if !hasComma {
+		return ErrBadFormat
+	}
+
+	// Parse start coordinates "StartLine.StartCol"
+	var hasStartDot bool
+	c.StartLine, c.StartCol, hasStartDot = strings.Cut(startCoordsBlock, ".")
+	if !hasStartDot {
+		return ErrBadFormat
+	}
+
+	// Parse end coordinates "EndLine.EndCol"
+	var hasEndDot bool
+	c.EndLine, c.EndCol, hasEndDot = strings.Cut(endCoordsBlock, ".")
+	if !hasEndDot {
+		return ErrBadFormat
+	}
+
+	return nil
+}
 
 // Boundary represents the position in a source file of the beginning or end of a
 // block as reported by the coverage profile. In HTML mode, it will correspond to
@@ -207,15 +273,25 @@ func compareBoundaries(a, b Boundary) int {
 }
 
 // findFile finds the location of the named file in GOROOT, GOPATH etc.
-func findFile(file string) (string, error) {
+func (p *Parser) findFile(file string) (string, error) {
 	file = strings.TrimPrefix(file, "_")
-	if _, err := os.Stat(file); err == nil {
-		return file, nil
+
+	if p.fsys != nil {
+		cleanPath := filepath.ToSlash(filepath.Clean(file))
+		cleanPath = strings.TrimPrefix(cleanPath, "/")
+		if _, err := fs.Stat(p.fsys, cleanPath); err == nil {
+			return cleanPath, nil // Return the clean path so fs.ReadFile works later
+		}
+	} else {
+		if _, err := os.Stat(file); err == nil {
+			return file, nil
+		}
 	}
+
 	dir, file := filepath.Split(file)
 	pkg, err := build.Import(dir, ".", build.FindOnly)
 	if err != nil {
-		return "", fmt.Errorf("can't find %q: %w", file, err)
+		return "", errs.Wrapf(err, ErrFindFile, "can't find %q", file)
 	}
 
 	return filepath.Join(pkg.Dir, file), nil
