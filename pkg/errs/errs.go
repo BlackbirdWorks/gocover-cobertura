@@ -4,21 +4,21 @@ import (
 	"fmt"
 )
 
-// Wrap wraps an existing error with additional context.
-// If err is nil, Wrap returns nil.
-func Wrap(err error, format string, args ...any) error {
+// Wrap wraps an existing error with a base error.
+// Both errors will be in the error chain.
+func Wrap(err error, baseErr error) error {
 	if err == nil {
 		return nil
 	}
 
-	if len(args) == 0 {
-		return fmt.Errorf("%s: %w", format, err)
-	}
-
-	return fmt.Errorf(format+": %w", append(args, err)...) //nolint:err113 // generic error wrapper
+	return fmt.Errorf("%w: %w", baseErr, err)
 }
 
-// New creates a new error with a formatted message.
-func New(format string, args ...any) error {
-	return fmt.Errorf(format, args...) //nolint:err113 // generic error wrapper
+// Wrapf wraps an existing error with a base error and additional formatted context.
+func Wrapf(err error, baseErr error, format string, args ...any) error {
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %w %s", baseErr, err, fmt.Sprintf(format, args...))
 }

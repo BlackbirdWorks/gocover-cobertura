@@ -16,6 +16,15 @@ import (
 // ErrNoMatches is returned when a glob pattern does not match any files.
 var ErrNoMatches = errors.New("no files matched pattern")
 
+var (
+	ErrConversionFailed = errors.New("conversion failed")
+	ErrOpenFile         = errors.New("failed to open input file")
+	ErrProcessPattern   = errors.New("failed to process pattern")
+	ErrOpenMatched      = errors.New("failed to open matched file")
+	ErrReadMatched      = errors.New("failed to read matched file")
+	ErrCreateOutput     = errors.New("failed to create output file")
+)
+
 const globSplitParts = 2
 
 // CLI represents the command line configuration for gocover-cobertura.
@@ -40,7 +49,7 @@ func (c *CLI) Run() error {
 	defer out.Close()
 
 	if err = cobertura.Convert(in, out); err != nil {
-		return errs.Wrap(err, "conversion failed")
+		return errs.Wrap(err, ErrConversionFailed)
 	}
 
 	return nil
@@ -54,7 +63,7 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 	if c.File != "" && c.File != "-" {
 		f, err := os.Open(c.File)
 		if err != nil {
-			return nil, errs.Wrap(err, "failed to open input file %q", c.File)
+			return nil, errs.Wrapf(err, ErrOpenFile, "%q", c.File)
 		}
 
 		return f, nil
@@ -66,10 +75,10 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 	matches, err := findMatchingFiles(c.Pattern)
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to process pattern %q", c.Pattern)
+		return nil, errs.Wrapf(err, ErrProcessPattern, "%q", c.Pattern)
 	}
 	if len(matches) == 0 {
-		return nil, errs.Wrap(ErrNoMatches, "%q", c.Pattern)
+		return nil, errs.Wrapf(ErrNoMatches, ErrProcessPattern, "%q", c.Pattern)
 	}
 
 	pr, pw := io.Pipe()
@@ -78,13 +87,13 @@ func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 			processErr := func() error {
 				f, openErr := os.Open(match)
 				if openErr != nil {
-					return errs.Wrap(openErr, "failed to open matched file %q", match)
+					return errs.Wrapf(openErr, ErrOpenMatched, "%q", match)
 				}
 				defer f.Close()
 
 				_, copyErr := io.Copy(pw, f)
 				if copyErr != nil {
-					return errs.Wrap(copyErr, "failed to read matched file %q", match)
+					return errs.Wrapf(copyErr, ErrReadMatched, "%q", match)
 				}
 
 				return nil
@@ -111,7 +120,7 @@ func (c *CLI) openOutput() (io.WriteCloser, error) {
 
 	f, err := os.Create(c.Output)
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to create output file %q", c.Output)
+		return nil, errs.Wrapf(err, ErrCreateOutput, "%q", c.Output)
 	}
 
 	return f, nil

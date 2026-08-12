@@ -25,6 +25,19 @@ import (
 // CoberturaDTDDecl is the standard DTD declaration for Cobertura XML.
 const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
+var (
+	ErrProcessProfiles = errors.New("failed to process profiles")
+	ErrWriteXMLHeader  = errors.New("failed to write XML header")
+	ErrWriteDTD        = errors.New("failed to write DTD declaration")
+	ErrEncodeXML       = errors.New("failed to encode XML")
+	ErrWriteNewline    = errors.New("failed to write newline")
+	ErrFlushBuffer     = errors.New("failed to flush buffer")
+	ErrParseProfiles   = errors.New("failed to parse profiles")
+	ErrFindFile        = errors.New("find file failed")
+	ErrReadFile        = errors.New("read file failed")
+	ErrParseFile       = errors.New("parse file failed")
+)
+
 // Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
 func Convert(in io.Reader, out io.Writer, opts ...Option) error {
 	bufOut := bufio.NewWriter(out)
@@ -35,29 +48,29 @@ func Convert(in io.Reader, out io.Writer, opts ...Option) error {
 	p := NewParser(opts...)
 	coverage, err := p.Parse(in)
 	if err != nil {
-		return errs.Wrap(err, "failed to process profiles")
+		return errs.Wrap(err, ErrProcessProfiles)
 	}
 
 	if _, err = out.Write([]byte(xml.Header)); err != nil {
-		return errs.Wrap(err, "failed to write XML header")
+		return errs.Wrap(err, ErrWriteXMLHeader)
 	}
 
 	if _, err = out.Write([]byte(CoberturaDTDDecl)); err != nil {
-		return errs.Wrap(err, "failed to write DTD declaration")
+		return errs.Wrap(err, ErrWriteDTD)
 	}
 
 	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
 	if err = encoder.Encode(coverage); err != nil {
-		return errs.Wrap(err, "failed to encode XML")
+		return errs.Wrap(err, ErrEncodeXML)
 	}
 
 	if _, err = out.Write([]byte{'\n'}); err != nil {
-		return errs.Wrap(err, "failed to write newline")
+		return errs.Wrap(err, ErrWriteNewline)
 	}
 
 	if err = bufOut.Flush(); err != nil {
-		return errs.Wrap(err, "failed to flush buffer")
+		return errs.Wrap(err, ErrFlushBuffer)
 	}
 
 	return nil
@@ -141,7 +154,7 @@ func NewParser(opts ...Option) *Parser {
 func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	profiles, err := ParseProfiles(bufio.NewReader(in))
 	if err != nil {
-		return nil, errs.Wrap(err, "failed to parse profiles")
+		return nil, errs.Wrap(err, ErrParseProfiles)
 	}
 
 	srcDirs := build.Default.SrcDirs()
@@ -218,7 +231,7 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	fileName := profile.FileName
 	absFilePath, err := p.findFile(fileName)
 	if err != nil {
-		return nil, "", errs.Wrap(err, "find file failed")
+		return nil, "", errs.Wrap(err, ErrFindFile)
 	}
 
 	var data []byte
@@ -232,13 +245,13 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	}
 
 	if err != nil {
-		return nil, "", errs.Wrap(err, "read file failed")
+		return nil, "", errs.Wrap(err, ErrReadFile)
 	}
 
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
 	if err != nil {
-		return nil, "", errs.Wrap(err, "parse file failed")
+		return nil, "", errs.Wrap(err, ErrParseFile)
 	}
 
 	pkgPath, _ := filepath.Split(fileName)
