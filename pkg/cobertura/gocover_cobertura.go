@@ -82,7 +82,7 @@ func Convert(in io.Reader, out io.Writer) error {
 type safePackageStore struct {
 	packages map[string]*Package
 	errs     []error
-	mu       sync.Mutex
+	mu       sync.RWMutex
 }
 
 func newSafePackageStore() *safePackageStore {
@@ -115,8 +115,8 @@ func (s *safePackageStore) AddError(err error) {
 }
 
 func (s *safePackageStore) Packages() []*Package {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	pkgs := make([]*Package, 0, len(s.packages))
 	for _, pkg := range s.packages {
@@ -127,8 +127,8 @@ func (s *safePackageStore) Packages() []*Package {
 }
 
 func (s *safePackageStore) Error() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if len(s.errs) == 0 {
 		return nil
