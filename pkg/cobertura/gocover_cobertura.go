@@ -78,6 +78,65 @@ func Convert(in io.Reader, out io.Writer) error {
 	return nil
 }
 
+// safePackageStore manages thread-safe accumulation of parsed packages and classes.
+type safePackageStore struct {
+	packages map[string]*Package
+	errs     []error
+	mu       sync.Mutex
+}
+
+func newSafePackageStore() *safePackageStore {
+	return &safePackageStore{
+		packages: make(map[string]*Package),
+	}
+}
+
+func (s *safePackageStore) AddClasses(pkgPath string, classes map[string]*Class) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pkg, exists := s.packages[pkgPath]
+	if !exists {
+		pkg = &Package{Name: pkgPath, Classes: []*Class{}}
+		s.packages[pkgPath] = pkg
+	}
+
+	for _, class := range classes {
+		pkg.Classes = append(pkg.Classes, class)
+	}
+	pkg.LineRate = pkg.HitRate()
+}
+
+func (s *safePackageStore) AddError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.errs = append(s.errs, err)
+}
+
+func (s *safePackageStore) Packages() []*Package {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pkgs := make([]*Package, 0, len(s.packages))
+	for _, pkg := range s.packages {
+		pkgs = append(pkgs, pkg)
+	}
+
+	return pkgs
+}
+
+func (s *safePackageStore) Error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.errs) == 0 {
+		return nil
+	}
+
+	return errors.Join(s.errs...)
+}
+
 // ParseProfiles processes a slice of coverage profiles concurrently and populates the Coverage metrics.
 func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	cov.Packages = []*Package{}
@@ -89,24 +148,29 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 		return nil
 	}
 
-	var (
-		mu   sync.Mutex
-		wg   sync.WaitGroup
-		errs []error
-	)
+	store := newSafePackageStore()
+	var wg sync.WaitGroup
 
 	for _, profile := range profiles {
 		wg.Add(1)
 		go func(prof *Profile) {
 			defer wg.Done()
-			if err := cov.parseProfileConcurrent(prof, &mu); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
+			classes, pkgPath, err := parseProfileFile(prof)
+			if err != nil {
+				store.AddError(err)
+
+				return
 			}
+			store.AddClasses(pkgPath, classes)
 		}(profile)
 	}
 	wg.Wait()
+
+	if err := store.Error(); err != nil {
+		return err
+	}
+
+	cov.Packages = store.Packages()
 
 	slices.SortFunc(cov.Packages, func(a, b *Package) int {
 		return cmp.Compare(a.Name, b.Name)
@@ -121,36 +185,42 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	cov.LinesCovered = cov.NumLinesWithHits()
 	cov.LineRate = cov.HitRate()
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
 	return nil
 }
 
 // ParseProfile processes a single Profile and updates the Coverage model.
 func (cov *Coverage) ParseProfile(profile *Profile) error {
-	var mu sync.Mutex
+	classes, pkgPath, err := parseProfileFile(profile)
+	if err != nil {
+		return err
+	}
 
-	return cov.parseProfileConcurrent(profile, &mu)
+	store := newSafePackageStore()
+	store.AddClasses(pkgPath, classes)
+	cov.Packages = store.Packages()
+	cov.LinesValid = cov.NumLines()
+	cov.LinesCovered = cov.NumLinesWithHits()
+	cov.LineRate = cov.HitRate()
+
+	return nil
 }
 
-func (cov *Coverage) parseProfileConcurrent(profile *Profile, mu *sync.Mutex) error {
+func parseProfileFile(profile *Profile) (map[string]*Class, string, error) {
 	fileName := profile.FileName
 	absFilePath, err := findFile(fileName)
 	if err != nil {
-		return fmt.Errorf("find file failed: %w", err)
+		return nil, "", fmt.Errorf("find file failed: %w", err)
 	}
 
 	data, err := os.ReadFile(absFilePath)
 	if err != nil {
-		return fmt.Errorf("read file failed: %w", err)
+		return nil, "", fmt.Errorf("read file failed: %w", err)
 	}
 
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
 	if err != nil {
-		return fmt.Errorf("parse file failed: %w", err)
+		return nil, "", fmt.Errorf("parse file failed: %w", err)
 	}
 
 	pkgPath, _ := filepath.Split(fileName)
@@ -165,28 +235,7 @@ func (cov *Coverage) parseProfileConcurrent(profile *Profile, mu *sync.Mutex) er
 	}
 	ast.Walk(visitor, parsed)
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	var pkg *Package
-	for _, p := range cov.Packages {
-		if p.Name == pkgPath {
-			pkg = p
-
-			break
-		}
-	}
-	if pkg == nil {
-		pkg = &Package{Name: pkgPath, Classes: []*Class{}}
-		cov.Packages = append(cov.Packages, pkg)
-	}
-
-	for _, class := range visitor.classes {
-		pkg.Classes = append(pkg.Classes, class)
-	}
-	pkg.LineRate = pkg.HitRate()
-
-	return nil
+	return visitor.classes, pkgPath, nil
 }
 
 type fileVisitor struct {
