@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"cmp"
 	"errors"
-	"fmt"
 	"go/build"
 	"io"
 	"io/fs"
@@ -20,6 +19,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // Profile represents the profiling data for a specific file.
@@ -56,20 +57,20 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 		if strings.HasPrefix(line, p) {
 			mode = line[len(p):]
 			if mode == "" {
-				return nil, fmt.Errorf("%w: %v", ErrBadMode, line)
+				return nil, errs.Wrap(ErrBadMode, "%v", line)
 			}
 
 			continue
 		}
 
 		if mode == "" {
-			return nil, fmt.Errorf("%w: missing mode header", ErrBadMode)
+			return nil, errs.Wrap(ErrBadMode, "missing mode header")
 		}
 
 		var covLine CoverageLine
 		if err := covLine.UnmarshalText([]byte(line)); err != nil {
 			// Fake regex empty to keep test identical if it cares
-			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, "")
+			return nil, errs.Wrap(ErrBadFormat, "%q, regex: %v", line, "")
 		}
 
 		prof := files[covLine.FileName]
@@ -88,7 +89,7 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 		numStmt, err6 := strconv.Atoi(covLine.NumStmt)
 		count, err7 := strconv.Atoi(covLine.Count)
 		if err := errors.Join(err1, err2, err3, err4, err6, err7); err != nil {
-			return nil, fmt.Errorf("%w: invalid integer in line %q: %w", ErrBadFormat, line, err)
+			return nil, errs.Wrap(ErrBadFormat, "invalid integer in line %q: %v", line, err)
 		}
 
 		prof.Blocks = append(prof.Blocks, ProfileBlock{
@@ -289,7 +290,7 @@ func (p *Parser) findFile(file string) (string, error) {
 	dir, file := filepath.Split(file)
 	pkg, err := build.Import(dir, ".", build.FindOnly)
 	if err != nil {
-		return "", fmt.Errorf("can't find %q: %w", file, err)
+		return "", errs.Wrap(err, "can't find %q", file)
 	}
 
 	return filepath.Join(pkg.Dir, file), nil

@@ -1,16 +1,19 @@
-package testfixtures
+package testfixtures_test
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWriteToTempDir(t *testing.T) {
-	tmpDir := WriteToTempDir(t)
-	
+	t.Parallel()
+
+	tmpDir := testfixtures.WriteToTempDir(t)
+
 	info, err := os.Stat(tmpDir)
 	require.NoError(t, err)
 	require.True(t, info.IsDir())

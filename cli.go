@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // ErrNoMatches is returned when a glob pattern does not match any files.
@@ -40,7 +40,7 @@ func (c *CLI) Run() error {
 	defer out.Close()
 
 	if err = cobertura.Convert(in, out); err != nil {
-		return fmt.Errorf("conversion failed: %w", err)
+		return errs.Wrap(err, "conversion failed")
 	}
 
 	return nil
@@ -54,7 +54,7 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 	if c.File != "" && c.File != "-" {
 		f, err := os.Open(c.File)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open input file %q: %w", c.File, err)
+			return nil, errs.Wrap(err, "failed to open input file %q", c.File)
 		}
 
 		return f, nil
@@ -66,10 +66,10 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 	matches, err := findMatchingFiles(c.Pattern)
 	if err != nil {
-		return nil, fmt.Errorf("failed to process pattern %q: %w", c.Pattern, err)
+		return nil, errs.Wrap(err, "failed to process pattern %q", c.Pattern)
 	}
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("%w %q", ErrNoMatches, c.Pattern)
+		return nil, errs.Wrap(ErrNoMatches, "%q", c.Pattern)
 	}
 
 	pr, pw := io.Pipe()
@@ -78,13 +78,13 @@ func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 			processErr := func() error {
 				f, openErr := os.Open(match)
 				if openErr != nil {
-					return fmt.Errorf("failed to open matched file %q: %w", match, openErr)
+					return errs.Wrap(openErr, "failed to open matched file %q", match)
 				}
 				defer f.Close()
 
 				_, copyErr := io.Copy(pw, f)
 				if copyErr != nil {
-					return fmt.Errorf("failed to read matched file %q: %w", match, copyErr)
+					return errs.Wrap(copyErr, "failed to read matched file %q", match)
 				}
 
 				return nil
@@ -111,7 +111,7 @@ func (c *CLI) openOutput() (io.WriteCloser, error) {
 
 	f, err := os.Create(c.Output)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create output file %q: %w", c.Output, err)
+		return nil, errs.Wrap(err, "failed to create output file %q", c.Output)
 	}
 
 	return f, nil

@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"encoding/xml"
 	"errors"
-	"fmt"
 	"go/ast"
 	"go/build"
 	"go/parser"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // CoberturaDTDDecl is the standard DTD declaration for Cobertura XML.
@@ -34,29 +35,29 @@ func Convert(in io.Reader, out io.Writer, opts ...Option) error {
 	p := NewParser(opts...)
 	coverage, err := p.Parse(in)
 	if err != nil {
-		return fmt.Errorf("failed to process profiles: %w", err)
+		return errs.Wrap(err, "failed to process profiles")
 	}
 
-	if _, err = fmt.Fprintf(bufOut, xml.Header); err != nil {
-		return fmt.Errorf("failed to write XML header: %w", err)
+	if _, err = out.Write([]byte(xml.Header)); err != nil {
+		return errs.Wrap(err, "failed to write XML header")
 	}
 
-	if _, err = fmt.Fprint(bufOut, CoberturaDTDDecl); err != nil {
-		return fmt.Errorf("failed to write DTD declaration: %w", err)
+	if _, err = out.Write([]byte(CoberturaDTDDecl)); err != nil {
+		return errs.Wrap(err, "failed to write DTD declaration")
 	}
 
 	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
 	if err = encoder.Encode(coverage); err != nil {
-		return fmt.Errorf("failed to encode XML: %w", err)
+		return errs.Wrap(err, "failed to encode XML")
 	}
 
-	if _, err = fmt.Fprintln(bufOut); err != nil {
-		return fmt.Errorf("failed to write newline: %w", err)
+	if _, err = out.Write([]byte{'\n'}); err != nil {
+		return errs.Wrap(err, "failed to write newline")
 	}
 
 	if err = bufOut.Flush(); err != nil {
-		return fmt.Errorf("failed to flush buffer: %w", err)
+		return errs.Wrap(err, "failed to flush buffer")
 	}
 
 	return nil
@@ -140,7 +141,7 @@ func NewParser(opts ...Option) *Parser {
 func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	profiles, err := ParseProfiles(bufio.NewReader(in))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse profiles: %w", err)
+		return nil, errs.Wrap(err, "failed to parse profiles")
 	}
 
 	srcDirs := build.Default.SrcDirs()
@@ -217,7 +218,7 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	fileName := profile.FileName
 	absFilePath, err := p.findFile(fileName)
 	if err != nil {
-		return nil, "", fmt.Errorf("find file failed: %w", err)
+		return nil, "", errs.Wrap(err, "find file failed")
 	}
 
 	var data []byte
@@ -231,13 +232,13 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	}
 
 	if err != nil {
-		return nil, "", fmt.Errorf("read file failed: %w", err)
+		return nil, "", errs.Wrap(err, "read file failed")
 	}
 
 	fset := token.NewFileSet()
 	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
 	if err != nil {
-		return nil, "", fmt.Errorf("parse file failed: %w", err)
+		return nil, "", errs.Wrap(err, "parse file failed")
 	}
 
 	pkgPath, _ := filepath.Split(fileName)

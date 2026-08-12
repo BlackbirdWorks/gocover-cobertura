@@ -1,0 +1,12 @@
+mode: set
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:17.42,22.86 3 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:22.86,23.17 1 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:23.17,25.4 1 0
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:27.3,29.16 2 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:29.16,31.4 1 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:33.3,34.17 2 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:34.17,36.4 1 0
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:38.3,38.44 1 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:41.2,41.16 1 1
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:41.16,43.3 1 0
+github.com/blackbirdworks/gocover-cobertura/internal/testfixtures/testfixtures.go:45.2,45.16 1 1
