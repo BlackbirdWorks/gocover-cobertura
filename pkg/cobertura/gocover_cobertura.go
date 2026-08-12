@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,33 +25,15 @@ import (
 const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
 // Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
-func Convert(in io.Reader, out io.Writer) error {
-	bufIn := bufio.NewReader(in)
-	var bufOut *bufio.Writer
+func Convert(in io.Reader, out io.Writer, opts ...Option) error {
+	bufOut := bufio.NewWriter(out)
 	if bw, ok := out.(*bufio.Writer); ok {
 		bufOut = bw
-	} else {
-		bufOut = bufio.NewWriter(out)
 	}
 
-	profiles, err := ParseProfiles(bufIn)
+	p := NewParser(opts...)
+	coverage, err := p.Parse(in)
 	if err != nil {
-		return fmt.Errorf("failed to parse profiles: %w", err)
-	}
-
-	srcDirs := build.Default.SrcDirs()
-	sources := make([]*Source, len(srcDirs))
-	for i, dir := range srcDirs {
-		sources[i] = &Source{dir}
-	}
-
-	coverage := Coverage{
-		Sources:   sources,
-		Packages:  nil,
-		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
-	}
-
-	if err = coverage.ParseProfiles(profiles); err != nil {
 		return fmt.Errorf("failed to process profiles: %w", err)
 	}
 
@@ -138,15 +121,45 @@ func (s *safePackageStore) Error() error {
 	return errors.Join(s.errs...)
 }
 
-// ParseProfiles processes a slice of coverage profiles concurrently and populates the Coverage metrics.
-func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
-	cov.Packages = []*Package{}
+// Parser manages the processing of Go coverage profiles into a Coverage representation.
+type Parser struct {
+	fsys fs.FS
+}
+
+// NewParser creates a new Parser with the provided options.
+func NewParser(opts ...Option) *Parser {
+	o := &Options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	return &Parser{fsys: o.FS}
+}
+
+// Parse processes coverage profile data from an io.Reader and generates a Coverage report.
+func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
+	profiles, err := ParseProfiles(bufio.NewReader(in))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse profiles: %w", err)
+	}
+
+	srcDirs := build.Default.SrcDirs()
+	sources := make([]*Source, len(srcDirs))
+	for i, dir := range srcDirs {
+		sources[i] = &Source{dir}
+	}
+
+	cov := &Coverage{
+		Sources:   sources,
+		Packages:  []*Package{},
+		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
+	}
 	if len(profiles) == 0 {
 		cov.LinesValid = 0
 		cov.LinesCovered = 0
 		cov.LineRate = 0
 
-		return nil
+		return cov, nil
 	}
 
 	store := newSafePackageStore()
@@ -166,9 +179,9 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 		go func() {
 			defer wg.Done()
 			for prof := range workCh {
-				classes, pkgPath, err := parseProfileFile(prof)
-				if err != nil {
-					store.AddError(err)
+				classes, pkgPath, profErr := p.parseProfileFile(prof)
+				if profErr != nil {
+					store.AddError(profErr)
 
 					continue
 				}
@@ -178,8 +191,8 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	}
 	wg.Wait()
 
-	if err := store.Error(); err != nil {
-		return err
+	if storeErr := store.Error(); storeErr != nil {
+		return nil, storeErr
 	}
 
 	cov.Packages = store.Packages()
@@ -197,34 +210,26 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	cov.LinesCovered = cov.NumLinesWithHits()
 	cov.LineRate = cov.HitRate()
 
-	return nil
+	return cov, nil
 }
 
-// ParseProfile processes a single Profile and updates the Coverage model.
-func (cov *Coverage) ParseProfile(profile *Profile) error {
-	classes, pkgPath, err := parseProfileFile(profile)
-	if err != nil {
-		return err
-	}
-
-	store := newSafePackageStore()
-	store.AddClasses(pkgPath, classes)
-	cov.Packages = store.Packages()
-	cov.LinesValid = cov.NumLines()
-	cov.LinesCovered = cov.NumLinesWithHits()
-	cov.LineRate = cov.HitRate()
-
-	return nil
-}
-
-func parseProfileFile(profile *Profile) (map[string]*Class, string, error) {
+func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, error) {
 	fileName := profile.FileName
-	absFilePath, err := findFile(fileName)
+	absFilePath, err := p.findFile(fileName)
 	if err != nil {
 		return nil, "", fmt.Errorf("find file failed: %w", err)
 	}
 
-	data, err := os.ReadFile(absFilePath)
+	var data []byte
+	if p.fsys != nil {
+		data, err = fs.ReadFile(p.fsys, strings.TrimPrefix(absFilePath, "/"))
+		if err != nil {
+			data, err = fs.ReadFile(p.fsys, absFilePath)
+		}
+	} else {
+		data, err = os.ReadFile(absFilePath)
+	}
+
 	if err != nil {
 		return nil, "", fmt.Errorf("read file failed: %w", err)
 	}

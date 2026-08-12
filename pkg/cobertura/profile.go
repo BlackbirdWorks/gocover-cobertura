@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"go/build"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -270,11 +271,21 @@ func compareBoundaries(a, b Boundary) int {
 }
 
 // findFile finds the location of the named file in GOROOT, GOPATH etc.
-func findFile(file string) (string, error) {
+func (p *Parser) findFile(file string) (string, error) {
 	file = strings.TrimPrefix(file, "_")
-	if _, err := os.Stat(file); err == nil {
-		return file, nil
+
+	if p.fsys != nil {
+		cleanPath := filepath.ToSlash(filepath.Clean(file))
+		cleanPath = strings.TrimPrefix(cleanPath, "/")
+		if _, err := fs.Stat(p.fsys, cleanPath); err == nil {
+			return cleanPath, nil // Return the clean path so fs.ReadFile works later
+		}
+	} else {
+		if _, err := os.Stat(file); err == nil {
+			return file, nil
+		}
 	}
+
 	dir, file := filepath.Split(file)
 	pkg, err := build.Import(dir, ".", build.FindOnly)
 	if err != nil {

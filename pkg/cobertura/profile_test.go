@@ -160,8 +160,8 @@ func TestParseProfile_BuildImport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cov := &cobertura.Coverage{}
-			err := cov.ParseProfile(tt.profile)
+			p := cobertura.NewParser()
+			_, err := p.Parse(strings.NewReader("mode: set\n" + tt.profile.FileName + ":1.1,2.2 1 1\n"))
 			if tt.expectErr {
 				require.Error(t, err)
 			} else {
