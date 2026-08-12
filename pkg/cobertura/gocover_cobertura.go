@@ -231,7 +231,7 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	fileName := profile.FileName
 	absFilePath, err := p.findFile(fileName)
 	if err != nil {
-		return nil, "", errs.Wrap(err, ErrFindFile)
+		return nil, "", err
 	}
 
 	var data []byte

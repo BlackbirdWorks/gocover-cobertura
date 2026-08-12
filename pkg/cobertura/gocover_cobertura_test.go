@@ -232,9 +232,9 @@ func TestConvert_Error(t *testing.T) {
 			},
 		},
 		{
-			name:          "write error after 20 bytes",
+			name:          "write error after 20 bytes", // fails during xml header
 			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
-			expectedError: errTestWriter.Error(),
+			expectedError: cobertura.ErrWriteXMLHeader.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
 				fw := &failWriter{failAfter: 20}
@@ -243,12 +243,23 @@ func TestConvert_Error(t *testing.T) {
 			},
 		},
 		{
-			name:          "write error after 50 bytes",
+			name:          "write error after 50 bytes", // fails during DTD
 			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
-			expectedError: errTestWriter.Error(),
+			expectedError: cobertura.ErrWriteDTD.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
 				fw := &failWriter{failAfter: 50}
+
+				return bufio.NewWriterSize(fw, 1), func() {}
+			},
+		},
+		{
+			name:          "write error after 130 bytes", // fails during encoder.Encode
+			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			expectedError: cobertura.ErrEncodeXML.Error(),
+			setupWriter: func(t *testing.T) (io.Writer, func()) {
+				t.Helper()
+				fw := &failWriter{failAfter: 130}
 
 				return bufio.NewWriterSize(fw, 1), func() {}
 			},
@@ -348,6 +359,7 @@ func TestParseProfile_Errors(t *testing.T) {
 		name          string
 		fileName      string
 		expectedError string
+		useFS         bool
 	}{
 		{
 			name:          "does not exist",
@@ -369,13 +381,24 @@ func TestParseProfile_Errors(t *testing.T) {
 			fileName:      tmpfileSyntax.Name(),
 			expectedError: "parse file failed",
 		},
+		{
+			name:          "fsys read file error",
+			fileName:      "testdata",
+			expectedError: "read file failed",
+			useFS:         true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			p := cobertura.NewParser()
+			var opts []cobertura.Option
+			if tt.useFS {
+				opts = append(opts, cobertura.WithFS(testfixtures.FS))
+			}
+			p := cobertura.NewParser(opts...)
+
 			_, parseErr := p.Parse(strings.NewReader("mode: set\n" + tt.fileName + ":1.1,2.2 1 1\n"))
 
 			require.Error(t, parseErr)
