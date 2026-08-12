@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -151,18 +152,29 @@ func (cov *Coverage) ParseProfiles(profiles []*Profile) error {
 	store := newSafePackageStore()
 	var wg sync.WaitGroup
 
-	for _, profile := range profiles {
-		wg.Add(1)
-		go func(prof *Profile) {
-			defer wg.Done()
-			classes, pkgPath, err := parseProfileFile(prof)
-			if err != nil {
-				store.AddError(err)
+	numWorkers := min(runtime.NumCPU(), len(profiles))
 
-				return
+	workCh := make(chan *Profile, len(profiles))
+	for _, profile := range profiles {
+		workCh <- profile
+	}
+	close(workCh)
+
+	for range numWorkers {
+		wg.Add(1)
+		//nolint:modernize // waitgroupgo is experimental/buggy
+		go func() {
+			defer wg.Done()
+			for prof := range workCh {
+				classes, pkgPath, err := parseProfileFile(prof)
+				if err != nil {
+					store.AddError(err)
+
+					continue
+				}
+				store.AddClasses(pkgPath, classes)
 			}
-			store.AddClasses(pkgPath, classes)
-		}(profile)
+		}()
 	}
 	wg.Wait()
 

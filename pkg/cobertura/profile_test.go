@@ -170,3 +170,15 @@ func TestParseProfile_BuildImport(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkCoverageLine_UnmarshalText(b *testing.B) {
+	line := []byte("github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1")
+	var covLine cobertura.CoverageLine
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_ = covLine.UnmarshalText(line)
+	}
+}

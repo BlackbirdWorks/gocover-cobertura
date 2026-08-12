@@ -72,68 +72,36 @@ func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%w %q", ErrNoMatches, c.Pattern)
 	}
 
-	readers := make([]io.Reader, len(matches))
-	closers := make([]io.Closer, len(matches))
-	for i, match := range matches {
-		lr := &lazyFileReader{path: match}
-		readers[i] = lr
-		closers[i] = lr
-	}
+	pr, pw := io.Pipe()
+	go func() {
+		for _, match := range matches {
+			processErr := func() error {
+				f, openErr := os.Open(match)
+				if openErr != nil {
+					return fmt.Errorf("failed to open matched file %q: %w", match, openErr)
+				}
+				defer f.Close()
 
-	return &multiReadCloser{
-		Reader:  io.MultiReader(readers...),
-		closers: closers,
-	}, nil
-}
+				_, copyErr := io.Copy(pw, f)
+				if copyErr != nil {
+					return fmt.Errorf("failed to read matched file %q: %w", match, copyErr)
+				}
 
-type lazyFileReader struct {
-	f    *os.File
-	path string
-}
+				return nil
+			}()
+			if processErr != nil {
+				if errors.Is(processErr, io.ErrClosedPipe) {
+					return
+				}
+				_ = pw.CloseWithError(processErr)
 
-func (l *lazyFileReader) Read(p []byte) (int, error) {
-	if l.f == nil {
-		f, err := os.Open(l.path)
-		if err != nil {
-			return 0, fmt.Errorf("failed to open matched file %q: %w", l.path, err)
+				return
+			}
 		}
-		l.f = f
-	}
+		_ = pw.Close()
+	}()
 
-	n, err := l.f.Read(p)
-	if errors.Is(err, io.EOF) {
-		_ = l.f.Close()
-		l.f = nil
-	}
-
-	return n, err
-}
-
-func (l *lazyFileReader) Close() error {
-	if l.f != nil {
-		err := l.f.Close()
-		l.f = nil
-
-		return err
-	}
-
-	return nil
-}
-
-type multiReadCloser struct {
-	io.Reader
-	closers []io.Closer
-}
-
-func (m *multiReadCloser) Close() error {
-	var errs []error
-	for _, c := range m.closers {
-		if err := c.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	return errors.Join(errs...)
+	return pr, nil
 }
 
 func (c *CLI) openOutput() (io.WriteCloser, error) {

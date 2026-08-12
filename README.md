@@ -1,6 +1,8 @@
 # gocover-cobertura
 
 [![Build Status](https://github.com/BlackbirdWorks/gocover-cobertura/actions/workflows/ci.yml/badge.svg)](https://github.com/BlackbirdWorks/gocover-cobertura/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/gh/BlackbirdWorks/gocover-cobertura/branch/main/graph/badge.svg)](https://codecov.io/gh/BlackbirdWorks/gocover-cobertura)
+[![CodeFactor](https://www.codefactor.io/repository/github/blackbirdworks/gocover-cobertura/badge)](https://www.codefactor.io/repository/github/blackbirdworks/gocover-cobertura)
 
 Convert Go cover profiles to [Cobertura](http://cobertura.sourceforge.net/) XML format.
 This is useful for generating coverage reports in CI pipelines (like Jenkins, GitLab CI, GitHub Actions) from `go test -coverprofile` output.

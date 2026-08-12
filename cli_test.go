@@ -1,8 +1,6 @@
 package main
 
 import (
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,56 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-var errTestClose = errors.New("close error")
-
-type failCloser struct{}
-
-func (failCloser) Close() error {
-	return errTestClose
-}
-
-func TestMultiReadCloser_Close(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		errContains string
-		closers     []io.Closer
-		expectErr   bool
-	}{
-		{
-			name:      "no errors",
-			closers:   []io.Closer{},
-			expectErr: false,
-		},
-		{
-			name:        "close error",
-			closers:     []io.Closer{failCloser{}},
-			expectErr:   true,
-			errContains: "close error",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			mc := &multiReadCloser{
-				Reader:  os.Stdin,
-				closers: tt.closers,
-			}
-
-			err := mc.Close()
-			if tt.expectErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
 
 func TestCLI_Run(t *testing.T) {
 	t.Parallel()
