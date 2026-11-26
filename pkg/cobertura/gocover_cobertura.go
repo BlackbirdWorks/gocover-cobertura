@@ -145,8 +145,7 @@ func (s *safePackageStore) Error() error {
 
 // Parser manages the processing of Go coverage profiles into a Coverage representation.
 type Parser struct {
-	fsys        fs.FS
-	importCache sync.Map
+	fsys fs.FS
 }
 
 type cachedImport struct {
@@ -193,7 +192,10 @@ func (p *Parser) Parse(reader io.Reader) (*Coverage, error) {
 
 	store := newSafePackageStore()
 
-	var wg sync.WaitGroup
+	var (
+		wg          sync.WaitGroup
+		importCache sync.Map
+	)
 
 	numWorkers := min(runtime.NumCPU(), len(profiles))
 
@@ -207,7 +209,7 @@ func (p *Parser) Parse(reader io.Reader) (*Coverage, error) {
 	for range numWorkers {
 		wg.Go(func() {
 			for prof := range workCh {
-				classes, pkgPath, profErr := p.parseProfileFile(prof)
+				classes, pkgPath, profErr := p.parseProfileFile(prof, &importCache)
 				if profErr != nil {
 					store.AddError(profErr)
 
@@ -253,10 +255,10 @@ func (p *Parser) Parse(reader io.Reader) (*Coverage, error) {
 	return cov, nil
 }
 
-func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, error) {
+func (p *Parser) parseProfileFile(profile *Profile, importCache *sync.Map) (map[string]*Class, string, error) {
 	fileName := profile.FileName
 
-	absFilePath, err := p.findFile(fileName)
+	absFilePath, err := p.findFile(fileName, importCache)
 	if err != nil {
 		return nil, "", err
 	}
@@ -326,8 +328,8 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 	method := &Method{Name: n.Name.Name}
 	method.Lines = []*Line{}
 
-	start := v.fset.Position(n.Pos())
-	end := v.fset.Position(n.End())
+	start := v.fset.PositionFor(n.Pos(), false)
+	end := v.fset.PositionFor(n.End(), false)
 	startLine := start.Line
 	startCol := start.Column
 	endLine := end.Line
@@ -374,8 +376,8 @@ func (v *fileVisitor) recvName(n *ast.FuncDecl) string {
 	}
 
 	recv := n.Recv.List[0].Type
-	start := v.fset.Position(recv.Pos())
-	end := v.fset.Position(recv.End())
+	start := v.fset.PositionFor(recv.Pos(), false)
+	end := v.fset.PositionFor(recv.End(), false)
 	name := string(v.fileData[start.Offset:end.Offset])
 
 	return strings.TrimSpace(strings.TrimLeft(name, "*"))

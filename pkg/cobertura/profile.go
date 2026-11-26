@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
@@ -305,7 +306,7 @@ func compareBoundaries(left, right Boundary) int {
 }
 
 // findFile finds the location of the named file in GOROOT, GOPATH etc.
-func (p *Parser) findFile(file string) (string, error) {
+func (p *Parser) findFile(file string, importCache *sync.Map) (string, error) {
 	file = strings.TrimPrefix(file, "_")
 
 	if p.fsys != nil {
@@ -326,7 +327,7 @@ func (p *Parser) findFile(file string) (string, error) {
 
 	dir, base := filepath.Split(file)
 
-	pkgDir, err := p.resolveImportDir(dir)
+	pkgDir, err := resolveImportDir(importCache, dir)
 	if err != nil {
 		return "", errs.Wrapf(err, ErrFindFile, "can't find %q", base)
 	}
@@ -334,8 +335,8 @@ func (p *Parser) findFile(file string) (string, error) {
 	return filepath.Join(pkgDir, base), nil
 }
 
-func (p *Parser) resolveImportDir(dir string) (string, error) {
-	if cached, ok := p.importCache.Load(dir); ok {
+func resolveImportDir(importCache *sync.Map, dir string) (string, error) {
+	if cached, ok := importCache.Load(dir); ok {
 		if entry, valid := cached.(cachedImport); valid {
 			return entry.dir, entry.err
 		}
@@ -350,7 +351,7 @@ func (p *Parser) resolveImportDir(dir string) (string, error) {
 		entry.dir = pkg.Dir
 	}
 
-	p.importCache.Store(dir, entry)
+	importCache.Store(dir, entry)
 
 	return entry.dir, entry.err
 }

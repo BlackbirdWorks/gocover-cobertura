@@ -219,6 +219,32 @@ func TestParse_SameLineFunctionsAndDeterministicClassSort(t *testing.T) {
 	assert.InEpsilon(t, float32(0.5), cov.LineRate, 0.01)
 }
 
+func TestParse_LineDirectiveUsesPhysicalLines(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "linedir.go")
+	src := "package sample\n" +
+		"//line remapped.go:50:1\n" +
+		"func Remapped() int {\n" +
+		"\tx := 1\n" +
+		"\treturn x\n" +
+		"}\n"
+	require.NoError(t, os.WriteFile(srcFile, []byte(src), 0o600))
+
+	profile := "mode: set\n" +
+		srcFile + ":3.21,6.2 2 1\n"
+
+	parser := cobertura.NewParser()
+	cov, err := parser.Parse(strings.NewReader(profile))
+	require.NoError(t, err)
+	require.Len(t, cov.Packages, 1)
+	require.Len(t, cov.Packages[0].Classes, 1)
+	require.Len(t, cov.Packages[0].Classes[0].Methods, 1)
+	require.Len(t, cov.Packages[0].Classes[0].Methods[0].Lines, 4)
+	assert.InEpsilon(t, float32(1.0), cov.LineRate, 0.01)
+}
+
 func TestConvert_Error(t *testing.T) {
 	t.Parallel()
 
@@ -409,7 +435,7 @@ func TestParseProfile_Errors(t *testing.T) {
 
 	tmpfile, err := os.CreateTemp(t.TempDir(), "not-readable")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.Remove(tmpfile.Name()) })
+	t.Cleanup(func() { _ = os.Remove(tmpfile.Name()) })
 	require.NoError(t, tmpfile.Chmod(0o000))
 
 	tmpfileSyntax, err := os.CreateTemp(t.TempDir(), "*.go")

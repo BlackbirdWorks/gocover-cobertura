@@ -205,10 +205,13 @@ func BenchmarkCoverageLine_UnmarshalText(b *testing.B) {
 
 func BenchmarkParseProfiles(b *testing.B) {
 	var builder strings.Builder
-	builder.WriteString("mode: set\n")
+
+	_, _ = builder.WriteString("mode: set\n")
 
 	for range 200 {
-		builder.WriteString("github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1\n")
+		_, _ = builder.WriteString(
+			"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1\n",
+		)
 	}
 
 	data := builder.String()
