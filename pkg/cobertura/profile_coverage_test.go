@@ -3,8 +3,9 @@ package cobertura_test
 import (
 	"testing"
 
-	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 )
 
 func TestCoverageLine_UnmarshalText_Errors(t *testing.T) {
@@ -26,6 +27,7 @@ func TestCoverageLine_UnmarshalText_Errors(t *testing.T) {
 			t.Parallel()
 
 			var c cobertura.CoverageLine
+
 			err := c.UnmarshalText([]byte(tt.input))
 			assert.ErrorIs(t, err, cobertura.ErrBadFormat)
 		})

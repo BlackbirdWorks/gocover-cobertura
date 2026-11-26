@@ -5,8 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 )
 
 func TestWriteToTempDir(t *testing.T) {

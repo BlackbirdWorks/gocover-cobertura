@@ -9,7 +9,8 @@ func main() {
 }
 
 func runMain(args []string) int {
-	if err := RunCLI(args); err != nil {
+	err := RunCLI(args)
+	if err != nil {
 		return 1
 	}
 

@@ -5,10 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
 )
+
+const testOutputXML = "output.xml"
 
 //nolint:paralleltest // changing working directory is not safe for parallel tests
 func TestCLI_Run(t *testing.T) {
@@ -28,7 +31,7 @@ func TestCLI_Run(t *testing.T) {
 
 				return CLI{
 					File:   "testdata/testdata_set.txt",
-					Output: "output.xml",
+					Output: testOutputXML,
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -53,7 +56,7 @@ func TestCLI_Run(t *testing.T) {
 
 				return CLI{
 					Pattern: "testdata/**/*.txt",
-					Output:  "output.xml",
+					Output:  testOutputXML,
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -70,7 +73,7 @@ func TestCLI_Run(t *testing.T) {
 
 				return CLI{
 					Pattern: "**/testdata_set.txt",
-					Output:  "output.xml",
+					Output:  testOutputXML,
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -87,7 +90,7 @@ func TestCLI_Run(t *testing.T) {
 
 				return CLI{
 					Pattern: "**",
-					Output:  "output.xml",
+					Output:  testOutputXML,
 				}
 			},
 			validate: func(t *testing.T, _ CLI) {
@@ -105,7 +108,7 @@ func TestCLI_Run(t *testing.T) {
 
 				return CLI{
 					Pattern: "testdata/*.txt",
-					Output:  "output.xml",
+					Output:  testOutputXML,
 				}
 			},
 			validate: func(t *testing.T, cli CLI) {
@@ -119,7 +122,7 @@ func TestCLI_Run(t *testing.T) {
 				t.Helper()
 				tmpDir := t.TempDir()
 				invalidFile := filepath.Join(tmpDir, "invalid.txt")
-				err := os.WriteFile(invalidFile, []byte("invalid data"), 0644)
+				err := os.WriteFile(invalidFile, []byte("invalid data"), 0o644)
 				require.NoError(t, err)
 
 				return CLI{File: invalidFile, Output: "-"}
@@ -173,11 +176,13 @@ func TestCLI_Run(t *testing.T) {
 				t.Helper()
 				tmpDir := testfixtures.WriteToTempDir(t)
 				t.Chdir(tmpDir)
+
 				validFile := "1_valid.out"
-				err := os.WriteFile(validFile, []byte("mode: set\n"), 0644)
+				err := os.WriteFile(validFile, []byte("mode: set\n"), 0o644)
 				require.NoError(t, err)
+
 				unreadableFile := "2_unreadable.out"
-				err = os.WriteFile(unreadableFile, []byte("mode: set\n"), 0000)
+				err = os.WriteFile(unreadableFile, []byte("mode: set\n"), 0o000)
 				require.NoError(t, err)
 
 				return CLI{Pattern: "*.out", Output: "-"}
@@ -239,8 +244,9 @@ func TestFindMatchingFiles_Errors(t *testing.T) {
 			if tt.name == "walk error" {
 				tmpDir := t.TempDir()
 				subDir := filepath.Join(tmpDir, "sub")
-				err := os.Mkdir(subDir, 0000)
+				err := os.Mkdir(subDir, 0o000)
 				require.NoError(t, err)
+
 				tt.pattern = tmpDir + "/**/*.out"
 			}
 
@@ -287,7 +293,6 @@ func TestIsMatched(t *testing.T) {
 	}
 }
 
-//nolint:paralleltest // changing working directory is not safe for parallel tests
 func TestRunMain(t *testing.T) {
 	tests := []struct {
 		name         string

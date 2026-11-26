@@ -4,8 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 var (

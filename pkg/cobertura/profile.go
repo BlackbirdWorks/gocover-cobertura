@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
@@ -43,20 +44,23 @@ var (
 	ErrBadMode = errors.New("bad mode line")
 	// ErrBadFormat is returned when a line in the coverage profile has an invalid format.
 	ErrBadFormat = errors.New("line doesn't match expected format")
+	// ErrScanProfile is returned when scanning the coverage profile input fails.
+	ErrScanProfile = errors.New("failed to scan profile")
 )
 
 // ParseProfiles parses profile data from the given Reader and returns a
 // Profile for each file.
-func ParseProfiles(in io.Reader) ([]*Profile, error) {
+func ParseProfiles(reader io.Reader) ([]*Profile, error) {
 	files := make(map[string]*Profile)
-	s := bufio.NewScanner(in)
+	scanner := bufio.NewScanner(reader)
 	mode := ""
 
-	for s.Scan() {
-		line := s.Text()
-		const p = "mode: "
-		if strings.HasPrefix(line, p) {
-			mode = line[len(p):]
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		const modePrefix = "mode: "
+		if strings.HasPrefix(line, modePrefix) {
+			mode = line[len(modePrefix):]
 			if mode == "" {
 				return nil, fmt.Errorf("%w: %v", ErrBadMode, line)
 			}
@@ -69,7 +73,9 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 		}
 
 		var covLine CoverageLine
-		if err := covLine.UnmarshalText([]byte(line)); err != nil {
+
+		parseErr := covLine.parse(line)
+		if parseErr != nil {
 			// Fake regex empty to keep test identical if it cares
 			return nil, fmt.Errorf("%w: %q, regex: %v", ErrBadFormat, line, "")
 		}
@@ -83,28 +89,17 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 			files[covLine.FileName] = prof
 		}
 
-		startLine, err1 := strconv.Atoi(covLine.StartLine)
-		startCol, err2 := strconv.Atoi(covLine.StartCol)
-		endLine, err3 := strconv.Atoi(covLine.EndLine)
-		endCol, err4 := strconv.Atoi(covLine.EndCol)
-		numStmt, err6 := strconv.Atoi(covLine.NumStmt)
-		count, err7 := strconv.Atoi(covLine.Count)
-		if err := errors.Join(err1, err2, err3, err4, err6, err7); err != nil {
-			return nil, errs.Wrapf(err, ErrBadFormat, "invalid integer in line %q", line)
+		block, blockErr := parseProfileBlock(&covLine, line)
+		if blockErr != nil {
+			return nil, blockErr
 		}
 
-		prof.Blocks = append(prof.Blocks, ProfileBlock{
-			StartLine: startLine,
-			StartCol:  startCol,
-			EndLine:   endLine,
-			EndCol:    endCol,
-			NumStmt:   numStmt,
-			Count:     count,
-		})
+		prof.Blocks = append(prof.Blocks, block)
 	}
 
-	if err := s.Err(); err != nil {
-		return nil, err
+	err := scanner.Err()
+	if err != nil {
+		return nil, errs.Wrap(err, ErrScanProfile)
 	}
 
 	for _, p := range files {
@@ -129,6 +124,30 @@ func ParseProfiles(in io.Reader) ([]*Profile, error) {
 	return profiles, nil
 }
 
+func parseProfileBlock(covLine *CoverageLine, line string) (ProfileBlock, error) {
+	startLine, err1 := strconv.Atoi(covLine.StartLine)
+	startCol, err2 := strconv.Atoi(covLine.StartCol)
+	endLine, err3 := strconv.Atoi(covLine.EndLine)
+	endCol, err4 := strconv.Atoi(covLine.EndCol)
+	numStmt, err6 := strconv.Atoi(covLine.NumStmt)
+
+	count, err7 := strconv.Atoi(covLine.Count)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err6 != nil || err7 != nil {
+		err := errors.Join(err1, err2, err3, err4, err6, err7)
+
+		return ProfileBlock{}, errs.Wrapf(err, ErrBadFormat, "invalid integer in line %q", line)
+	}
+
+	return ProfileBlock{
+		StartLine: startLine,
+		StartCol:  startCol,
+		EndLine:   endLine,
+		EndCol:    endCol,
+		NumStmt:   numStmt,
+		Count:     count,
+	}, nil
+}
+
 // CoverageLine represents a single parsed line from a coverage profile.
 // The gocover format is:
 // "filename:StartLine.StartCol,EndLine.EndCol NumStmt Count".
@@ -142,36 +161,38 @@ type CoverageLine struct {
 	Count     string
 }
 
-// UnmarshalText implements encoding.TextUnmarshaler.
+// UnmarshalText implements [encoding.TextUnmarshaler].
 func (c *CoverageLine) UnmarshalText(text []byte) error {
-	line := string(text)
+	return c.parse(string(text))
+}
 
+func (c *CoverageLine) parse(line string) error {
 	// We parse from right-to-left because the filename could theoretically contain spaces or colons.
 	// Format: "[rest of line] [NumStmt] [Count]"
-	lastSpaceIdx := strings.LastIndexByte(line, ' ')
-	if lastSpaceIdx == -1 {
+	rest, count, hasLastSpace := strings.CutLast(line, " ")
+	if !hasLastSpace {
 		return ErrBadFormat
 	}
-	c.Count = line[lastSpaceIdx+1:]
 
-	secondLastSpaceIdx := strings.LastIndexByte(line[:lastSpaceIdx], ' ')
-	if secondLastSpaceIdx == -1 {
+	c.Count = count
+
+	fileAndCoords, numStmt, hasSecondSpace := strings.CutLast(rest, " ")
+	if !hasSecondSpace {
 		return ErrBadFormat
 	}
-	c.NumStmt = line[secondLastSpaceIdx+1 : lastSpaceIdx]
 
-	// The remaining string is "filename:StartLine.StartCol,EndLine.EndCol"
-	fileAndCoords := line[:secondLastSpaceIdx]
+	c.NumStmt = numStmt
 
 	// The last colon separates the filename from the coordinate block.
-	lastColonIdx := strings.LastIndexByte(fileAndCoords, ':')
-	if lastColonIdx == -1 {
+	var (
+		coordsBlock string
+		hasColon    bool
+	)
+
+	c.FileName, coordsBlock, hasColon = strings.CutLast(fileAndCoords, ":")
+	if !hasColon {
 		return ErrBadFormat
 	}
-	c.FileName = fileAndCoords[:lastColonIdx]
-
-	// Coordinates block: "StartLine.StartCol,EndLine.EndCol"
-	coordsBlock := fileAndCoords[lastColonIdx+1:]
 
 	startCoordsBlock, endCoordsBlock, hasComma := strings.Cut(coordsBlock, ",")
 	if !hasComma {
@@ -180,6 +201,7 @@ func (c *CoverageLine) UnmarshalText(text []byte) error {
 
 	// Parse start coordinates "StartLine.StartCol"
 	var hasStartDot bool
+
 	c.StartLine, c.StartCol, hasStartDot = strings.Cut(startCoordsBlock, ".")
 	if !hasStartDot {
 		return ErrBadFormat
@@ -187,6 +209,7 @@ func (c *CoverageLine) UnmarshalText(text []byte) error {
 
 	// Parse end coordinates "EndLine.EndCol"
 	var hasEndDot bool
+
 	c.EndLine, c.EndCol, hasEndDot = strings.Cut(endCoordsBlock, ".")
 	if !hasEndDot {
 		return ErrBadFormat
@@ -208,32 +231,38 @@ type Boundary struct {
 // Boundaries returns a Profile as a set of Boundary objects within the provided src.
 func (p *Profile) Boundaries(src []byte) []Boundary {
 	var boundaries []Boundary
+
 	maxCount := 0
 	for _, b := range p.Blocks {
 		if b.Count > maxCount {
 			maxCount = b.Count
 		}
 	}
+
 	divisor := math.Log(float64(maxCount))
 
 	line, col := 1, 2
-	for si, bi := 0, 0; si < len(src) && bi < len(p.Blocks); {
-		b := p.Blocks[bi]
-		if b.StartLine == line && b.StartCol == col {
-			boundaries = append(boundaries, createBoundary(si, true, b.Count, maxCount, divisor))
+
+	for srcIdx, blockIdx := 0, 0; srcIdx < len(src) && blockIdx < len(p.Blocks); {
+		block := p.Blocks[blockIdx]
+		if block.StartLine == line && block.StartCol == col {
+			boundaries = append(boundaries, createBoundary(srcIdx, true, block.Count, maxCount, divisor))
 		}
-		if b.EndLine == line && b.EndCol == col {
-			boundaries = append(boundaries, createBoundary(si, false, 0, maxCount, divisor))
-			bi++
+
+		if block.EndLine == line && block.EndCol == col {
+			boundaries = append(boundaries, createBoundary(srcIdx, false, 0, maxCount, divisor))
+			blockIdx++
 
 			continue
 		}
-		if src[si] == '\n' {
+
+		if src[srcIdx] == '\n' {
 			line++
 			col = 0
 		}
+
 		col++
-		si++
+		srcIdx++
 	}
 
 	slices.SortFunc(boundaries, compareBoundaries)
@@ -241,31 +270,35 @@ func (p *Profile) Boundaries(src []byte) []Boundary {
 	return boundaries
 }
 
-func createBoundary(offset int, start bool, count int, maxCount int, divisor float64) Boundary {
-	b := Boundary{Offset: offset, Start: start, Count: count}
+func createBoundary(offset int, start bool, count, maxCount int, divisor float64) Boundary {
+	boundary := Boundary{Offset: offset, Start: start, Count: count}
 	if !start || count == 0 {
-		return b
+		return boundary
 	}
+
 	if maxCount <= 1 {
-		b.Norm = 0.8
+		boundary.Norm = 0.8
 
-		return b
+		return boundary
 	}
+
 	if count > 0 {
-		b.Norm = math.Log(float64(count)) / divisor
+		boundary.Norm = math.Log(float64(count)) / divisor
 	}
 
-	return b
+	return boundary
 }
 
-func compareBoundaries(a, b Boundary) int {
-	if c := cmp.Compare(a.Offset, b.Offset); c != 0 {
+func compareBoundaries(left, right Boundary) int {
+	if c := cmp.Compare(left.Offset, right.Offset); c != 0 {
 		return c
 	}
-	if !a.Start && b.Start {
+
+	if !left.Start && right.Start {
 		return -1
 	}
-	if a.Start && !b.Start {
+
+	if left.Start && !right.Start {
 		return 1
 	}
 
@@ -273,26 +306,52 @@ func compareBoundaries(a, b Boundary) int {
 }
 
 // findFile finds the location of the named file in GOROOT, GOPATH etc.
-func (p *Parser) findFile(file string) (string, error) {
+func (p *Parser) findFile(file string, importCache *sync.Map) (string, error) {
 	file = strings.TrimPrefix(file, "_")
 
 	if p.fsys != nil {
 		cleanPath := filepath.ToSlash(filepath.Clean(file))
+
 		cleanPath = strings.TrimPrefix(cleanPath, "/")
-		if _, err := fs.Stat(p.fsys, cleanPath); err == nil {
+
+		_, err := fs.Stat(p.fsys, cleanPath)
+		if err == nil {
 			return cleanPath, nil // Return the clean path so fs.ReadFile works later
 		}
 	} else {
-		if _, err := os.Stat(file); err == nil {
+		_, err := os.Stat(file)
+		if err == nil {
 			return file, nil
 		}
 	}
 
-	dir, file := filepath.Split(file)
-	pkg, err := build.Import(dir, ".", build.FindOnly)
+	dir, base := filepath.Split(file)
+
+	pkgDir, err := resolveImportDir(importCache, dir)
 	if err != nil {
-		return "", errs.Wrapf(err, ErrFindFile, "can't find %q", file)
+		return "", errs.Wrapf(err, ErrFindFile, "can't find %q", base)
 	}
 
-	return filepath.Join(pkg.Dir, file), nil
+	return filepath.Join(pkgDir, base), nil
+}
+
+func resolveImportDir(importCache *sync.Map, dir string) (string, error) {
+	if cached, ok := importCache.Load(dir); ok {
+		if entry, valid := cached.(cachedImport); valid {
+			return entry.dir, entry.err
+		}
+	}
+
+	pkg, err := build.Import(dir, ".", build.FindOnly)
+
+	var entry cachedImport
+	if err != nil {
+		entry.err = err
+	} else {
+		entry.dir = pkg.Dir
+	}
+
+	importCache.Store(dir, entry)
+
+	return entry.dir, entry.err
 }

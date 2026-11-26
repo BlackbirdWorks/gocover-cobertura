@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 // CoberturaDTDDecl is the standard DTD declaration for Cobertura XML.
 const CoberturaDTDDecl = "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n"
 
+// Sentinel errors returned during Cobertura conversion and profile parsing.
 var (
 	ErrProcessProfiles = errors.New("failed to process profiles")
 	ErrWriteXMLHeader  = errors.New("failed to write XML header")
@@ -39,37 +41,44 @@ var (
 )
 
 // Convert reads Go coverage profiles from the given reader and writes the Cobertura XML format to the writer.
-func Convert(in io.Reader, out io.Writer, opts ...Option) error {
+func Convert(reader io.Reader, out io.Writer, opts ...Option) error {
 	bufOut := bufio.NewWriter(out)
 	if bw, ok := out.(*bufio.Writer); ok {
 		bufOut = bw
 	}
 
-	p := NewParser(opts...)
-	coverage, err := p.Parse(in)
+	covParser := NewParser(opts...)
+
+	coverage, err := covParser.Parse(reader)
 	if err != nil {
 		return errs.Wrap(err, ErrProcessProfiles)
 	}
 
-	if _, err = out.Write([]byte(xml.Header)); err != nil {
+	_, err = bufOut.WriteString(xml.Header)
+	if err != nil {
 		return errs.Wrap(err, ErrWriteXMLHeader)
 	}
 
-	if _, err = out.Write([]byte(CoberturaDTDDecl)); err != nil {
+	_, err = bufOut.WriteString(CoberturaDTDDecl)
+	if err != nil {
 		return errs.Wrap(err, ErrWriteDTD)
 	}
 
 	encoder := xml.NewEncoder(bufOut)
 	encoder.Indent("", "\t")
-	if err = encoder.Encode(coverage); err != nil {
+
+	err = encoder.Encode(coverage)
+	if err != nil {
 		return errs.Wrap(err, ErrEncodeXML)
 	}
 
-	if _, err = out.Write([]byte{'\n'}); err != nil {
+	err = bufOut.WriteByte('\n')
+	if err != nil {
 		return errs.Wrap(err, ErrWriteNewline)
 	}
 
-	if err = bufOut.Flush(); err != nil {
+	err = bufOut.Flush()
+	if err != nil {
 		return errs.Wrap(err, ErrFlushBuffer)
 	}
 
@@ -102,7 +111,6 @@ func (s *safePackageStore) AddClasses(pkgPath string, classes map[string]*Class)
 	for _, class := range classes {
 		pkg.Classes = append(pkg.Classes, class)
 	}
-	pkg.LineRate = pkg.HitRate()
 }
 
 func (s *safePackageStore) AddError(err error) {
@@ -140,24 +148,30 @@ type Parser struct {
 	fsys fs.FS
 }
 
-// NewParser creates a new Parser with the provided options.
-func NewParser(opts ...Option) *Parser {
-	o := &Options{}
-	for _, opt := range opts {
-		opt(o)
-	}
-
-	return &Parser{fsys: o.FS}
+type cachedImport struct {
+	err error
+	dir string
 }
 
-// Parse processes coverage profile data from an io.Reader and generates a Coverage report.
-func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
-	profiles, err := ParseProfiles(bufio.NewReader(in))
+// NewParser creates a new Parser with the provided options.
+func NewParser(opts ...Option) *Parser {
+	options := &Options{FS: nil}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	return &Parser{fsys: options.FS}
+}
+
+// Parse processes coverage profile data from an [io.Reader] and generates a Coverage report.
+func (p *Parser) Parse(reader io.Reader) (*Coverage, error) {
+	profiles, err := ParseProfiles(reader)
 	if err != nil {
 		return nil, errs.Wrap(err, ErrParseProfiles)
 	}
 
 	srcDirs := build.Default.SrcDirs()
+
 	sources := make([]*Source, len(srcDirs))
 	for i, dir := range srcDirs {
 		sources[i] = &Source{dir}
@@ -166,7 +180,7 @@ func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	cov := &Coverage{
 		Sources:   sources,
 		Packages:  []*Package{},
-		Timestamp: time.Now().UnixNano() / int64(time.Millisecond),
+		Timestamp: time.Now().UnixMilli(),
 	}
 	if len(profiles) == 0 {
 		cov.LinesValid = 0
@@ -177,7 +191,11 @@ func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	}
 
 	store := newSafePackageStore()
-	var wg sync.WaitGroup
+
+	var (
+		wg          sync.WaitGroup
+		importCache sync.Map
+	)
 
 	numWorkers := min(runtime.NumCPU(), len(profiles))
 
@@ -185,27 +203,28 @@ func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	for _, profile := range profiles {
 		workCh <- profile
 	}
+
 	close(workCh)
 
 	for range numWorkers {
-		wg.Add(1)
-		//nolint:modernize // waitgroupgo is experimental/buggy
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for prof := range workCh {
-				classes, pkgPath, profErr := p.parseProfileFile(prof)
+				classes, pkgPath, profErr := p.parseProfileFile(prof, &importCache)
 				if profErr != nil {
 					store.AddError(profErr)
 
 					continue
 				}
+
 				store.AddClasses(pkgPath, classes)
 			}
-		}()
+		})
 	}
+
 	wg.Wait()
 
-	if storeErr := store.Error(); storeErr != nil {
+	storeErr := store.Error()
+	if storeErr != nil {
 		return nil, storeErr
 	}
 
@@ -214,22 +233,32 @@ func (p *Parser) Parse(in io.Reader) (*Coverage, error) {
 	slices.SortFunc(cov.Packages, func(a, b *Package) int {
 		return cmp.Compare(a.Name, b.Name)
 	})
+
 	for _, pkg := range cov.Packages {
 		slices.SortFunc(pkg.Classes, func(a, b *Class) int {
-			return cmp.Compare(a.Filename, b.Filename)
+			if c := cmp.Compare(a.Filename, b.Filename); c != 0 {
+				return c
+			}
+
+			return cmp.Compare(a.Name, b.Name)
 		})
+		pkg.LineRate = pkg.HitRate()
 	}
 
 	cov.LinesValid = cov.NumLines()
+
 	cov.LinesCovered = cov.NumLinesWithHits()
-	cov.LineRate = cov.HitRate()
+	if cov.LinesValid > 0 {
+		cov.LineRate = float32(cov.LinesCovered) / float32(cov.LinesValid)
+	}
 
 	return cov, nil
 }
 
-func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, error) {
+func (p *Parser) parseProfileFile(profile *Profile, importCache *sync.Map) (map[string]*Class, string, error) {
 	fileName := profile.FileName
-	absFilePath, err := p.findFile(fileName)
+
+	absFilePath, err := p.findFile(fileName, importCache)
 	if err != nil {
 		return nil, "", err
 	}
@@ -249,6 +278,7 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 	}
 
 	fset := token.NewFileSet()
+
 	parsed, err := parser.ParseFile(fset, absFilePath, data, 0)
 	if err != nil {
 		return nil, "", errs.Wrap(err, ErrParseFile)
@@ -264,7 +294,16 @@ func (p *Parser) parseProfileFile(profile *Profile) (map[string]*Class, string, 
 		classes:  make(map[string]*Class),
 		profile:  profile,
 	}
-	ast.Walk(visitor, parsed)
+
+	for _, decl := range parsed.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			visitor.visitFunc(fn)
+		}
+	}
+
+	for _, class := range visitor.classes {
+		class.LineRate = class.Lines.HitRate()
+	}
 
 	return visitor.classes, pkgPath, nil
 }
@@ -277,39 +316,40 @@ type fileVisitor struct {
 	fileData []byte
 }
 
-func (v *fileVisitor) Visit(node ast.Node) ast.Visitor {
-	if n, ok := node.(*ast.FuncDecl); ok {
-		class := v.class(n)
-		method := v.method(n)
-		method.LineRate = method.Lines.HitRate()
-		class.Methods = append(class.Methods, method)
-		class.Lines = append(class.Lines, method.Lines...)
-		class.LineRate = class.Lines.HitRate()
-	}
-
-	return v
+func (v *fileVisitor) visitFunc(n *ast.FuncDecl) {
+	class := v.class(n)
+	method := v.method(n)
+	method.LineRate = method.Lines.HitRate()
+	class.Methods = append(class.Methods, method)
+	class.Lines = append(class.Lines, method.Lines...)
 }
 
 func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 	method := &Method{Name: n.Name.Name}
 	method.Lines = []*Line{}
 
-	start := v.fset.Position(n.Pos())
-	end := v.fset.Position(n.End())
+	start := v.fset.PositionFor(n.Pos(), false)
+	end := v.fset.PositionFor(n.End(), false)
 	startLine := start.Line
 	startCol := start.Column
 	endLine := end.Line
 	endCol := end.Column
-	// The blocks are sorted, so we can stop counting as soon as we reach the end of the relevant block.
-	for _, b := range v.profile.Blocks {
+	blocks := v.profile.Blocks
+	startIdx := sort.Search(len(blocks), func(i int) bool {
+		return blocks[i].StartLine >= startLine
+	})
+	// The blocks are sorted by start position, so we can stop counting once we pass the function end.
+	for _, b := range blocks[startIdx:] {
 		if b.StartLine > endLine || (b.StartLine == endLine && b.StartCol >= endCol) {
 			// Past the end of the function.
 			break
 		}
-		if b.EndLine < startLine || (b.EndLine == startLine && b.EndCol <= startCol) {
+
+		if b.EndLine == startLine && b.EndCol <= startCol {
 			// Before the beginning of the function
 			continue
 		}
+
 		for i := b.StartLine; i <= b.EndLine; i++ {
 			method.Lines.AddOrUpdateLine(i, int64(b.Count))
 		}
@@ -320,6 +360,7 @@ func (v *fileVisitor) method(n *ast.FuncDecl) *Method {
 
 func (v *fileVisitor) class(n *ast.FuncDecl) *Class {
 	className := v.recvName(n)
+
 	class := v.classes[className]
 	if class == nil {
 		class = &Class{Name: className, Filename: v.fileName, Methods: []*Method{}, Lines: []*Line{}}
@@ -333,9 +374,10 @@ func (v *fileVisitor) recvName(n *ast.FuncDecl) string {
 	if n.Recv == nil {
 		return "-"
 	}
+
 	recv := n.Recv.List[0].Type
-	start := v.fset.Position(recv.Pos())
-	end := v.fset.Position(recv.End())
+	start := v.fset.PositionFor(recv.Pos(), false)
+	end := v.fset.PositionFor(recv.End(), false)
 	name := string(v.fileData[start.Offset:end.Offset])
 
 	return strings.TrimSpace(strings.TrimLeft(name, "*"))

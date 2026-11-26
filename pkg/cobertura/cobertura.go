@@ -1,4 +1,6 @@
 // Package cobertura defines data structures and XML serialization models for Cobertura coverage reports.
+//
+//nolint:revive // max-public-structs: Cobertura XML schema defines six top-level model structs.
 package cobertura
 
 import (
@@ -82,6 +84,7 @@ func (lines *Lines) NumLines() int64 {
 // NumLinesWithHits returns the number of lines with a hit count > 0.
 func (lines *Lines) NumLinesWithHits() int64 {
 	var numLinesWithHits int64
+
 	for _, line := range *lines {
 		if line.Hits > 0 {
 			numLinesWithHits++
@@ -105,6 +108,7 @@ func (lines *Lines) AddOrUpdateLine(lineNumber int, hits int64) {
 			return
 		}
 	}
+
 	*lines = append(*lines, &Line{Number: lineNumber, Hits: hits})
 }
 
@@ -124,6 +128,8 @@ func (method Method) NumLinesWithHits() int64 {
 }
 
 // HitRate returns a float32 from 0.0 to 1.0 representing what fraction of lines have hits.
+//
+//nolint:gocritic // hugeParam: value receiver kept for backward-compatible method set.
 func (class Class) HitRate() float32 {
 	numLines := class.NumLines()
 	if numLines == 0 {
@@ -134,6 +140,8 @@ func (class Class) HitRate() float32 {
 }
 
 // NumLines returns the number of lines.
+//
+//nolint:gocritic // hugeParam: value receiver kept for backward-compatible method set.
 func (class Class) NumLines() int64 {
 	var numLines int64
 	for _, method := range class.Methods {
@@ -144,6 +152,8 @@ func (class Class) NumLines() int64 {
 }
 
 // NumLinesWithHits returns the number of lines with a hit count > 0.
+//
+//nolint:gocritic // hugeParam: value receiver kept for backward-compatible method set.
 func (class Class) NumLinesWithHits() int64 {
 	var numLinesWithHits int64
 	for _, method := range class.Methods {
