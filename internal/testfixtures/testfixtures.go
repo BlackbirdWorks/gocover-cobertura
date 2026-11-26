@@ -1,15 +1,25 @@
+// Package testfixtures embeds sample Go files and coverage profiles for tests.
 package testfixtures
 
 import (
 	"embed"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
+// FS holds the embedded test fixture files.
+//
 //go:embed testdata/*
-var FS embed.FS
+var FS embed.FS //nolint:varnamelen // FS is an exported Go embed.FS identifier.
+
+var errReadFixture = errors.New("failed to read embedded fixture")
 
 // WriteToTempDir extracts the embedded testdata into a temporary directory
 // and returns the path to that temporary directory. This is particularly
@@ -19,28 +29,25 @@ func WriteToTempDir(t *testing.T) string {
 
 	tempDir := t.TempDir()
 
-	err := fs.WalkDir(FS, "testdata", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := fs.WalkDir(FS, "testdata", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
 
 		destPath := filepath.Join(tempDir, path)
 
-		if d.IsDir() {
-			return os.MkdirAll(destPath, 0750)
+		if entry.IsDir() {
+			return os.MkdirAll(destPath, 0o750)
 		}
 
-		data, err := fs.ReadFile(FS, path)
-		if err != nil {
-			return err
+		data, readErr := fs.ReadFile(FS, path)
+		if readErr != nil {
+			return errs.Wrapf(readErr, errReadFixture, "%q", path)
 		}
 
-		return os.WriteFile(destPath, data, 0600)
+		return os.WriteFile(destPath, data, 0o600)
 	})
-
-	if err != nil {
-		t.Fatalf("failed to write embedded testdata to temp dir: %v", err)
-	}
+	require.NoError(t, err, "failed to write embedded testdata to temp dir")
 
 	return tempDir
 }

@@ -11,11 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
-	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/internal/testfixtures"
+	"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 )
+
+const testSimpleProfile = "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
 
 var errTestWriter = errors.New("writer failed")
 
@@ -24,13 +27,14 @@ type failWriter struct {
 	written   int
 }
 
-func (f *failWriter) Write(p []byte) (int, error) {
-	if f.written+len(p) > f.failAfter {
+func (f *failWriter) Write(data []byte) (int, error) {
+	if f.written+len(data) > f.failAfter {
 		return 0, errTestWriter
 	}
-	f.written += len(p)
 
-	return len(p), nil
+	f.written += len(data)
+
+	return len(data), nil
 }
 
 func TestConvert_Success(t *testing.T) {
@@ -46,7 +50,7 @@ func TestConvert_Success(t *testing.T) {
 			input: func(t *testing.T) io.Reader {
 				t.Helper()
 
-				return strings.NewReader("mode: set\ntestdata/func1.go:4.14,5.16 1 1\n")
+				return strings.NewReader(testSimpleProfile)
 			},
 			validate: func(t *testing.T, output []byte) {
 				t.Helper()
@@ -62,6 +66,7 @@ func TestConvert_Success(t *testing.T) {
 			},
 			validate: func(t *testing.T, output []byte) {
 				t.Helper()
+
 				outputString := string(output)
 				assert.Contains(t, outputString, xml.Header)
 				assert.Contains(t, outputString, cobertura.CoberturaDTDDecl)
@@ -76,13 +81,14 @@ func TestConvert_Success(t *testing.T) {
 			},
 			validate: func(t *testing.T, output []byte) {
 				t.Helper()
-				v := cobertura.Coverage{}
-				dec := xml.NewDecoder(bytes.NewReader(output))
-				require.NoError(t, dec.Decode(&v))
 
-				assert.Equal(t, "coverage", v.XMLName.Local)
-				assert.NotNil(t, v.Sources)
-				assert.Nil(t, v.Packages)
+				cov := cobertura.Coverage{}
+				dec := xml.NewDecoder(bytes.NewReader(output))
+				require.NoError(t, dec.Decode(&cov))
+
+				assert.Equal(t, "coverage", cov.XMLName.Local)
+				assert.NotNil(t, cov.Sources)
+				assert.Nil(t, cov.Packages)
 			},
 		},
 		{
@@ -90,39 +96,40 @@ func TestConvert_Success(t *testing.T) {
 			input: func(t *testing.T) io.Reader {
 				t.Helper()
 				tmpDir := testfixtures.WriteToTempDir(t)
-				pipe1rd, err := os.Open(filepath.Join(tmpDir, "testdata/testdata_set.txt"))
+				pipe1rd, err := os.Open(filepath.Join(tmpDir, "testdata", "testdata_set.txt"))
 				require.NoError(t, err, "Can't parse testdata")
 
 				return pipe1rd
 			},
 			validate: func(t *testing.T, output []byte) {
 				t.Helper()
-				v := cobertura.Coverage{}
+
+				cov := cobertura.Coverage{}
 				dec := xml.NewDecoder(bytes.NewReader(output))
-				require.NoError(t, dec.Decode(&v))
+				require.NoError(t, dec.Decode(&cov))
 
-				assert.Equal(t, "coverage", v.XMLName.Local)
-				require.NotNil(t, v.Sources)
-				require.Len(t, v.Packages, 1)
+				assert.Equal(t, "coverage", cov.XMLName.Local)
+				require.NotNil(t, cov.Sources)
+				require.Len(t, cov.Packages, 1)
 
-				p := v.Packages[0]
-				assert.Equal(t, "./testdata", strings.TrimRight(p.Name, "/"))
-				assert.Greater(t, float64(p.HitRate()), 0.0)
+				pkg := cov.Packages[0]
+				assert.Equal(t, "./testdata", strings.TrimRight(pkg.Name, "/"))
+				assert.Greater(t, float64(pkg.HitRate()), 0.0)
 
-				require.Len(t, p.Classes, 2)
+				require.Len(t, pkg.Classes, 2)
 
-				c := p.Classes[0]
-				assert.Equal(t, "-", c.Name)
-				assert.True(t, strings.HasSuffix(c.Filename, "testdata/func1.go"))
-				assert.InEpsilon(t, 0.25, c.HitRate(), 0.01)
+				cls := pkg.Classes[0]
+				assert.Equal(t, "-", cls.Name)
+				assert.True(t, strings.HasSuffix(cls.Filename, "testdata/func1.go"))
+				assert.InEpsilon(t, 0.25, cls.HitRate(), 0.01)
 
-				require.Len(t, c.Methods, 1)
-				require.Len(t, c.Lines, 4)
+				require.Len(t, cls.Methods, 1)
+				require.Len(t, cls.Lines, 4)
 
-				m := c.Methods[0]
-				assert.Equal(t, "Func1", m.Name)
-				assert.InEpsilon(t, 0.25, m.HitRate(), 0.01)
-				require.Len(t, m.Lines, 4)
+				method := cls.Methods[0]
+				assert.Equal(t, "Func1", method.Name)
+				assert.InEpsilon(t, 0.25, method.HitRate(), 0.01)
+				require.Len(t, method.Lines, 4)
 
 				expectedLines := []struct {
 					number int
@@ -135,19 +142,19 @@ func TestConvert_Success(t *testing.T) {
 				}
 
 				for i, expected := range expectedLines {
-					l := m.Lines[i]
+					l := method.Lines[i]
 					assert.Equal(t, expected.number, l.Number)
 					assert.Equal(t, expected.hits, l.Hits)
 
-					cl := c.Lines[i]
+					cl := cls.Lines[i]
 					assert.Equal(t, expected.number, cl.Number)
 					assert.Equal(t, expected.hits, cl.Hits)
 				}
 
-				c = p.Classes[1]
-				assert.Equal(t, "Type1", c.Name)
-				assert.True(t, strings.HasSuffix(c.Filename, "testdata/func2.go"))
-				assert.Len(t, c.Methods, 3)
+				cls = pkg.Classes[1]
+				assert.Equal(t, "Type1", cls.Name)
+				assert.True(t, strings.HasSuffix(cls.Filename, "testdata/func2.go"))
+				assert.Len(t, cls.Methods, 3)
 			},
 		},
 	}
@@ -156,17 +163,60 @@ func TestConvert_Success(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			in := tt.input(t)
-			if closer, ok := in.(io.Closer); ok && in != os.Stdin {
+			reader := tt.input(t)
+			if closer, ok := reader.(io.Closer); ok && reader != os.Stdin {
 				defer closer.Close()
 			}
 
 			var out bytes.Buffer
-			err := cobertura.Convert(in, &out, cobertura.WithFS(testfixtures.FS))
+
+			err := cobertura.Convert(reader, &out, cobertura.WithFS(testfixtures.FS))
 			require.NoError(t, err)
 			tt.validate(t, out.Bytes())
 		})
 	}
+}
+
+func TestConvert_UnbufferedOutputFormatting(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	err := cobertura.Convert(
+		strings.NewReader(testSimpleProfile),
+		&out,
+		cobertura.WithFS(testfixtures.FS),
+	)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.True(t, strings.HasPrefix(output, xml.Header+cobertura.CoberturaDTDDecl+"<coverage "))
+	assert.True(t, strings.HasSuffix(output, "</coverage>\n"))
+	assert.NotContains(t, output, cobertura.CoberturaDTDDecl+"\n<coverage")
+}
+
+func TestParse_SameLineFunctionsAndDeterministicClassSort(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "sameline.go")
+	src := "package sample\n" +
+		"type S struct{}\n" +
+		"func A() int { return 1 }; func (S) B() int { return 2 }\n"
+	require.NoError(t, os.WriteFile(srcFile, []byte(src), 0o600))
+
+	profile := "mode: set\n" +
+		srcFile + ":3.14,3.26 1 1\n" +
+		srcFile + ":3.45,3.57 1 0\n"
+
+	p := cobertura.NewParser()
+	cov, err := p.Parse(strings.NewReader(profile))
+	require.NoError(t, err)
+	require.Len(t, cov.Packages, 1)
+	require.Len(t, cov.Packages[0].Classes, 2)
+	assert.Equal(t, "-", cov.Packages[0].Classes[0].Name)
+	assert.Equal(t, "S", cov.Packages[0].Classes[1].Name)
+	assert.InEpsilon(t, float32(0.5), cov.LineRate, 0.01)
 }
 
 func TestConvert_Error(t *testing.T) {
@@ -174,10 +224,11 @@ func TestConvert_Error(t *testing.T) {
 
 	// Dynamically compute the size of the XML output without newline
 	// to properly test write boundaries in different environments.
-	inStr := "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n"
 	var sizeBuf bytes.Buffer
-	sizeErr := cobertura.Convert(strings.NewReader(inStr), &sizeBuf, cobertura.WithFS(testfixtures.FS))
+
+	sizeErr := cobertura.Convert(strings.NewReader(testSimpleProfile), &sizeBuf, cobertura.WithFS(testfixtures.FS))
 	require.NoError(t, sizeErr)
+
 	xmlSize := sizeBuf.Len() - 1 // subtract the newline
 
 	tests := []struct {
@@ -192,6 +243,7 @@ func TestConvert_Error(t *testing.T) {
 			expectedError: "failed to parse profiles",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				var b bytes.Buffer
 
 				return &b, func() {}
@@ -203,6 +255,7 @@ func TestConvert_Error(t *testing.T) {
 			expectedError: "failed to process profiles",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				var b bytes.Buffer
 
 				return &b, func() {}
@@ -214,6 +267,7 @@ func TestConvert_Error(t *testing.T) {
 			expectedError: "io: read/write on closed pipe",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				pipe2rd, pipe2wr := io.Pipe()
 				require.NoError(t, pipe2wr.Close())
 
@@ -222,10 +276,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "write error after 0 bytes",
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: errTestWriter.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: 0}
 
 				return bufio.NewWriterSize(fw, 1), func() {}
@@ -233,10 +288,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "write error after 20 bytes", // fails during xml header
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: cobertura.ErrWriteXMLHeader.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: 20}
 
 				return bufio.NewWriterSize(fw, 1), func() {}
@@ -244,10 +300,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "write error after 50 bytes", // fails during DTD
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: cobertura.ErrWriteDTD.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: 50}
 
 				return bufio.NewWriterSize(fw, 1), func() {}
@@ -255,10 +312,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "write error after 130 bytes", // fails during encoder.Encode
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: cobertura.ErrEncodeXML.Error(),
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: 130}
 
 				return bufio.NewWriterSize(fw, 1), func() {}
@@ -266,10 +324,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "write error on newline",
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: "failed to write newline",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: 0}
 
 				return bufio.NewWriterSize(fw, xmlSize), func() {}
@@ -277,10 +336,11 @@ func TestConvert_Error(t *testing.T) {
 		},
 		{
 			name:          "flush error",
-			input:         "mode: set\ntestdata/func1.go:4.14,5.16 1 1\n",
+			input:         testSimpleProfile,
 			expectedError: "failed to flush buffer",
 			setupWriter: func(t *testing.T) (io.Writer, func()) {
 				t.Helper()
+
 				fw := &failWriter{failAfter: xmlSize}
 
 				return bufio.NewWriterSize(fw, 4096), func() {}
@@ -326,13 +386,16 @@ func TestParseProfiles_MultipleProfileErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			p := cobertura.NewParser()
+			parser := cobertura.NewParser()
+
 			var inputData strings.Builder
 			inputData.WriteString("mode: set\n")
+
 			for _, prof := range tt.profiles {
 				inputData.WriteString(prof.FileName + ":1.1,2.2 1 1\n")
 			}
-			_, err := p.Parse(strings.NewReader(inputData.String()))
+
+			_, err := parser.Parse(strings.NewReader(inputData.String()))
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errContains1)
@@ -347,7 +410,7 @@ func TestParseProfile_Errors(t *testing.T) {
 	tmpfile, err := os.CreateTemp(t.TempDir(), "not-readable")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.Remove(tmpfile.Name()) })
-	require.NoError(t, tmpfile.Chmod(000))
+	require.NoError(t, tmpfile.Chmod(0o000))
 
 	tmpfileSyntax, err := os.CreateTemp(t.TempDir(), "*.go")
 	require.NoError(t, err)
@@ -397,6 +460,7 @@ func TestParseProfile_Errors(t *testing.T) {
 			if tt.useFS {
 				opts = append(opts, cobertura.WithFS(testfixtures.FS))
 			}
+
 			p := cobertura.NewParser(opts...)
 
 			_, parseErr := p.Parse(strings.NewReader("mode: set\n" + tt.fileName + ":1.1,2.2 1 1\n"))

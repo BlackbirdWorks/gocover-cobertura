@@ -6,16 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 )
 
 var errTestRead = errors.New("read error")
 
 type errReader struct{}
 
-func (e *errReader) Read([]byte) (int, error) {
+func (*errReader) Read([]byte) (int, error) {
 	return 0, errTestRead
 }
 
@@ -81,9 +82,11 @@ func TestParseProfiles(t *testing.T) {
 			_, err := cobertura.ParseProfiles(tt.reader)
 			if tt.expectErr {
 				require.Error(t, err)
+
 				if tt.errContains != "" {
 					assert.Contains(t, err.Error(), tt.errContains)
 				}
+
 				if tt.expectedError != nil {
 					require.ErrorIs(t, err, tt.expectedError)
 				}
@@ -161,6 +164,7 @@ func TestParseProfile_BuildImport(t *testing.T) {
 			t.Parallel()
 
 			p := cobertura.NewParser()
+
 			_, err := p.Parse(strings.NewReader("mode: set\n" + tt.profile.FileName + ":1.1,2.2 1 1\n"))
 			if tt.expectErr {
 				require.Error(t, err)
@@ -171,8 +175,24 @@ func TestParseProfile_BuildImport(t *testing.T) {
 	}
 }
 
+func TestParseProfile_BuildImportCache(t *testing.T) {
+	t.Parallel()
+
+	parser := cobertura.NewParser()
+	input := "mode: set\n" +
+		"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:1.1,2.2 1 1\n" +
+		"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/options.go:1.1,2.2 1 1\n"
+	_, err := parser.Parse(strings.NewReader(input))
+	require.NoError(t, err)
+
+	// Re-parse to exercise cache hit deterministically without concurrency race.
+	_, err = parser.Parse(strings.NewReader(input))
+	require.NoError(t, err)
+}
+
 func BenchmarkCoverageLine_UnmarshalText(b *testing.B) {
 	line := []byte("github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1")
+
 	var covLine cobertura.CoverageLine
 
 	b.ReportAllocs()
@@ -180,5 +200,27 @@ func BenchmarkCoverageLine_UnmarshalText(b *testing.B) {
 
 	for range b.N {
 		_ = covLine.UnmarshalText(line)
+	}
+}
+
+func BenchmarkParseProfiles(b *testing.B) {
+	var builder strings.Builder
+	builder.WriteString("mode: set\n")
+
+	for range 200 {
+		builder.WriteString("github.com/blackbirdworks/gocover-cobertura/pkg/cobertura/profile.go:130.1,135.2 5 1\n")
+	}
+
+	data := builder.String()
+	reader := strings.NewReader("")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		reader.Reset(data)
+
+		_, err := cobertura.ParseProfiles(reader)
+		require.NoError(b, err)
 	}
 }

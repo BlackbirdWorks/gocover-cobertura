@@ -1,3 +1,4 @@
+// Package main implements the gocover-cobertura CLI entry point.
 package main
 
 import (
@@ -9,13 +10,15 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-	cobertura "github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
+
+	"github.com/blackbirdworks/gocover-cobertura/pkg/cobertura"
 	"github.com/blackbirdworks/gocover-cobertura/pkg/errs"
 )
 
 // ErrNoMatches is returned when a glob pattern does not match any files.
 var ErrNoMatches = errors.New("no files matched pattern")
 
+// Sentinel errors returned during CLI execution.
 var (
 	ErrConversionFailed = errors.New("conversion failed")
 	ErrOpenFile         = errors.New("failed to open input file")
@@ -23,6 +26,10 @@ var (
 	ErrOpenMatched      = errors.New("failed to open matched file")
 	ErrReadMatched      = errors.New("failed to read matched file")
 	ErrCreateOutput     = errors.New("failed to create output file")
+	ErrGlobPattern      = errors.New("failed to glob pattern")
+	ErrWalkDirectory    = errors.New("failed to walk directory")
+	ErrInitCLI          = errors.New("failed to initialize CLI parser")
+	ErrParseCLI         = errors.New("failed to parse CLI arguments")
 )
 
 const globSplitParts = 2
@@ -36,11 +43,11 @@ type CLI struct {
 
 // Run executes the CLI logic using guard clauses without else statements.
 func (c *CLI) Run() error {
-	in, err := c.openInput()
+	input, err := c.openInput()
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer input.Close()
 
 	out, err := c.openOutput()
 	if err != nil {
@@ -48,7 +55,8 @@ func (c *CLI) Run() error {
 	}
 	defer out.Close()
 
-	if err = cobertura.Convert(in, out); err != nil {
+	err = cobertura.Convert(input, out)
+	if err != nil {
 		return errs.Wrap(err, ErrConversionFailed)
 	}
 
@@ -61,12 +69,12 @@ func (c *CLI) openInput() (io.ReadCloser, error) {
 	}
 
 	if c.File != "" && c.File != "-" {
-		f, err := os.Open(c.File)
+		file, err := os.Open(c.File)
 		if err != nil {
 			return nil, errs.Wrapf(err, ErrOpenFile, "%q", c.File)
 		}
 
-		return f, nil
+		return file, nil
 	}
 
 	return io.NopCloser(os.Stdin), nil
@@ -77,21 +85,23 @@ func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 	if err != nil {
 		return nil, errs.Wrapf(err, ErrProcessPattern, "%q", c.Pattern)
 	}
+
 	if len(matches) == 0 {
 		return nil, errs.Wrapf(ErrNoMatches, ErrProcessPattern, "%q", c.Pattern)
 	}
 
-	pr, pw := io.Pipe()
+	pipeReader, pipeWriter := io.Pipe()
+
 	go func() {
 		for _, match := range matches {
 			processErr := func() error {
-				f, openErr := os.Open(match)
+				matchedFile, openErr := os.Open(match)
 				if openErr != nil {
 					return errs.Wrapf(openErr, ErrOpenMatched, "%q", match)
 				}
-				defer f.Close()
+				defer matchedFile.Close()
 
-				_, copyErr := io.Copy(pw, f)
+				_, copyErr := io.Copy(pipeWriter, matchedFile)
 				if copyErr != nil {
 					return errs.Wrapf(copyErr, ErrReadMatched, "%q", match)
 				}
@@ -102,15 +112,17 @@ func (c *CLI) openPatternInput() (io.ReadCloser, error) {
 				if errors.Is(processErr, io.ErrClosedPipe) {
 					return
 				}
-				_ = pw.CloseWithError(processErr)
+
+				_ = pipeWriter.CloseWithError(processErr)
 
 				return
 			}
 		}
-		_ = pw.Close()
+
+		_ = pipeWriter.Close()
 	}()
 
-	return pr, nil
+	return pipeReader, nil
 }
 
 func (c *CLI) openOutput() (io.WriteCloser, error) {
@@ -137,10 +149,16 @@ func (nopWriteCloser) Close() error {
 // findMatchingFiles finds files matching a pattern, supporting recursive ** matching.
 func findMatchingFiles(pattern string) ([]string, error) {
 	if !strings.Contains(pattern, "**") {
-		return filepath.Glob(pattern)
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, errs.Wrap(err, ErrGlobPattern)
+		}
+
+		return matches, nil
 	}
 
 	parts := strings.SplitN(pattern, "**", globSplitParts)
+
 	baseDir := parts[0]
 	if baseDir == "" {
 		baseDir = "."
@@ -149,6 +167,7 @@ func findMatchingFiles(pattern string) ([]string, error) {
 	}
 
 	subPattern := strings.TrimPrefix(parts[1], string(os.PathSeparator))
+
 	subPattern = strings.TrimPrefix(subPattern, "/")
 	if subPattern == "" {
 		subPattern = "*"
@@ -159,7 +178,8 @@ func findMatchingFiles(pattern string) ([]string, error) {
 
 func walkMatchingFiles(baseDir, subPattern string) ([]string, error) {
 	var matches []string
-	err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, walkErr error) error {
+
+	err := filepath.WalkDir(baseDir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if os.IsNotExist(walkErr) {
 				return nil
@@ -167,7 +187,8 @@ func walkMatchingFiles(baseDir, subPattern string) ([]string, error) {
 
 			return walkErr
 		}
-		if d.IsDir() {
+
+		if entry.IsDir() {
 			return nil
 		}
 
@@ -182,9 +203,8 @@ func walkMatchingFiles(baseDir, subPattern string) ([]string, error) {
 
 		return nil
 	})
-
 	if err != nil {
-		return nil, err
+		return nil, errs.Wrap(err, ErrWalkDirectory)
 	}
 
 	return matches, nil
@@ -208,18 +228,19 @@ func isMatched(path, relPath, subPattern string) bool {
 // RunCLI initializes Kong with arguments and executes the CLI application.
 func RunCLI(args []string) error {
 	var cli CLI
+
 	parser, err := kong.New(&cli,
 		kong.Name("gocover-cobertura"),
 		kong.Description("Convert Go cover profile to Cobertura XML format"),
 		kong.Exit(func(int) {}),
 	)
 	if err != nil {
-		return err
+		return errs.Wrap(err, ErrInitCLI)
 	}
 
 	_, err = parser.Parse(args)
 	if err != nil {
-		return err
+		return errs.Wrap(err, ErrParseCLI)
 	}
 
 	return cli.Run()

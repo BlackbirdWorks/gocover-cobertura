@@ -1,3 +1,4 @@
+// Package errs provides error wrapping helpers.
 package errs
 
 import (
@@ -6,7 +7,7 @@ import (
 
 // Wrap wraps an existing error with a base error.
 // Both errors will be in the error chain.
-func Wrap(err error, baseErr error) error {
+func Wrap(err, baseErr error) error {
 	if err == nil {
 		return nil
 	}
@@ -15,7 +16,7 @@ func Wrap(err error, baseErr error) error {
 }
 
 // Wrapf wraps an existing error with a base error and additional formatted context.
-func Wrapf(err error, baseErr error, format string, args ...any) error {
+func Wrapf(err, baseErr error, format string, args ...any) error {
 	if err == nil {
 		return nil
 	}
